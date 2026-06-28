@@ -305,27 +305,156 @@ reset long-expired `held` seats to `free` and mark their orders `expired`.
 - **Shared domain logic** (`src/lib/inventory.ts`): `reserveSeat`, `markOrderPaid`,
   `verifyTicket` — imported by both server functions and the webhook route.
 
-### Routes / pages
+### Server routes (non-page HTTP endpoints)
 
-| Path                  | Type         | Purpose |
-|-----------------------|--------------|---------|
-| `/` or `/e/$slug`     | page         | Storefront: details, price, live "X of N left", countdown, Buy. |
-| `/checkout/success`   | page         | Retrieves the session, fulfills synchronously, shows the pass. |
-| `/t/$ticketCode`      | page         | Digital pass: QR + holder name + event. |
-| `/staff/verify`       | page (gated) | Scan/lookup → VALID/INVALID + holder name. |
-| `/admin`              | page (gated) | Live counts (sold / held / free), buyer list, CSV export. |
-| `/api/stripe/webhook` | server route | Backstop → `markOrderPaid`. |
-| `/api/cron/expire`    | server route | Optional Vercel Cron → tidy expired holds. |
+| Path                  | Purpose |
+|-----------------------|---------|
+| `/api/stripe/webhook` | Stripe backstop → `markOrderPaid`. |
+| `/api/cron/expire`    | Optional Vercel Cron → tidy expired holds. |
+
+---
+
+## 6A. Frontend pages & screens
+
+### Sitemap (every screen, grouped by who uses it)
+
+```
+PUBLIC / BUYER
+  /                      Events list ........... browse all drops
+  /e/$slug               Event page ............ one drop: details + Buy
+  /checkout/success      Success ............... confirm payment, reveal the pass
+  /checkout/cancel       Cancelled ............. hold released, try again
+  /t/$ticketCode         Digital pass .......... the QR the holder shows in store
+  /passes                Find my pass .......... email-a-link recovery
+
+STAFF (gated by STAFF_TOKEN)
+  /staff                 Staff gate ............ enter the staff code once
+  /staff/verify          Scanner ............... scan QR → VALID / INVALID + name
+
+ADMIN (gated by ADMIN_TOKEN)
+  /admin/login           Admin gate
+  /admin                 Dashboard ............. all events + live stats + "New drop"
+  /admin/events/new      Create drop ........... the per-event config form
+  /admin/events/$id      Drop detail ........... live counts, orders, refunds, CSV
+  /admin/events/$id/edit Edit drop ............. change settings before it sells out
+
+SYSTEM
+  __root.tsx             App shell / layout, nav, error boundary, not-found
+```
+
+### Events list page — `/`
+
+The browse screen. Lists every drop that's upcoming, on sale, or recently sold
+out. For Soupleaf today there's usually one active drop, so if exactly one is on
+sale this page may auto-redirect to that event page; the list still matters once
+there are multiple/seasonal drops.
+
+- **Loads:** `listEvents()` → for each event its config + live status from
+  `getEventStatus()` (sold / held / available, derived from ticket rows).
+- **Each card shows:** name, thumbnail, price, a **status pill**
+  (`◷ Upcoming` with countdown · `● On sale` · `Sold out` · `Ended`), and live
+  "X of N left" for on-sale drops.
+- **Primary action per card:** `Buy →` (on sale) · `Notify me` (upcoming) ·
+  disabled `Sold out`.
+- **States:** loading skeleton · empty ("no drops yet") · normal grid.
+
+```
+┌─────────────────────────────────────────────────────┐
+│  SOUPLEAF · Hotpot Pass Drops                         │
+├─────────────────────────────────────────────────────┤
+│  ┌──────────────────┐   ┌──────────────────┐         │
+│  │ [img]            │   │ [img]            │          │
+│  │ Summer Drop      │   │ Fall Drop        │          │
+│  │ $25 · 1/person   │   │ $30 · 1/person   │          │
+│  │ ● ON SALE        │   │ ◷ opens in 2d 4h │          │
+│  │ 12 of 20 left    │   │ Aug 15, 6:00 PM  │          │
+│  │ [   Buy →    ]   │   │ [  Notify me  ]  │          │
+│  └──────────────────┘   └──────────────────┘         │
+└─────────────────────────────────────────────────────┘
+```
+
+### Event page — `/e/$slug`
+
+The single-drop storefront and the main conversion screen. This is where the
+buyer reserves a seat and is sent to Stripe.
+
+- **Loads:** `getEventStatus(slug)` — event config + live availability. Polls or
+  revalidates every few seconds so "X of N left" and the countdown stay live.
+- **Shows:** name, description (what the pass grants), price, per-person limit, a
+  **live availability bar + count**, and a **countdown** until `sale_starts_at`.
+- **Buy:** name + email fields → button calls the `reserveSeat()` server fn. On
+  success it redirects to the Stripe Checkout URL; on `SOLD_OUT` it flips the
+  page to the sold-out state without charging anyone.
+- **Four states drive the whole page:**
+  - **Upcoming** — countdown shown, Buy disabled / replaced by "Notify me".
+  - **On sale** — Buy enabled, live count decrementing.
+  - **Sold out** — Buy replaced by "Sold out" (optional "join waitlist").
+  - **Ended** — sale closed message.
+
+```
+┌─────────────────────────────────────────────────────┐
+│  ← All drops                                          │
+│                                                       │
+│  SOUPLEAF HOTPOT PASS — SUMMER DROP                   │
+│  Unlimited free hotpot. Show your pass in store.      │
+│                                                       │
+│  $25 · 1 per person                                   │
+│  ●  ON SALE NOW        12 of 20 left                  │
+│  ▓▓▓▓▓▓▓▓░░░░░░░░░░  (updates live)                    │
+│                                                       │
+│  Name   [________________________]                    │
+│  Email  [________________________]                    │
+│  [        Buy Hotpot Pass  →        ]                 │
+│                                                       │
+│  ▸ How it works   ▸ What's included   ▸ Terms         │
+└─────────────────────────────────────────────────────┘
+```
+
+### The rest of the pages (briefer)
+
+- **`/checkout/success`** — lands here from Stripe with `?session_id=…`. Shows a
+  brief "confirming payment…" state, calls the synchronous fulfillment
+  (`markOrderPaid`), then reveals the **digital pass inline** (QR + name) and
+  notes that a link was emailed.
+- **`/checkout/cancel`** — buyer backed out; explains the hold will be released
+  and offers "Try again".
+- **`/t/$ticketCode`** — the **pass itself**: large QR, holder name, event name,
+  a green `VALID` badge. This is the page the holder pulls up at the counter (and
+  the link in their confirmation email). Add-to-wallet is a later enhancement.
+- **`/passes` (Find my pass)** — recovery screen: enter email → we email a link
+  to your pass(es). Covers lost emails / the "I paid but don't see my pass" case.
+- **`/staff` + `/staff/verify`** — staff enter the shared `STAFF_TOKEN` once
+  (stored in an httpOnly cookie), then the **scanner**: camera reads the QR (with
+  a manual code-entry fallback), calls `verifyTicket()`, and shows a big
+  **green VALID + holder name** or **red INVALID**. Read-only — no redemption.
+- **`/admin` (dashboard)** — table of all drops with live sold/held/available and
+  revenue, plus **"+ New drop"**.
+- **`/admin/events/new` + `/admin/events/$id/edit`** — the **per-event config
+  form** (this is the "configurable per event" UI): name, slug, ticket limit,
+  price, sale start/end, hold minutes, max per user. Creating a drop generates its
+  ticket rows.
+- **`/admin/events/$id` (drop detail)** — the operational view during a drop:
+  live counts, the **orders/buyers table** (who bought, paid/pending/refunded),
+  **CSV export**, and per-order actions (refund, cancel, resend pass email).
+
+> **Not a page, but part of the flow:** a **purchase-confirmation email** with the
+> buyer's pass link. Worth building alongside the success page so passes survive a
+> closed tab.
 
 ### Project structure
 
 ```
 src/
 ├─ routes/
-│  ├─ __root.tsx, index.tsx, e.$slug.tsx
-│  ├─ checkout.success.tsx
-│  ├─ t.$ticketCode.tsx          # digital pass
-│  ├─ staff.verify.tsx, admin.index.tsx
+│  ├─ __root.tsx                  # layout, nav, error boundary, not-found
+│  ├─ index.tsx                   # events list
+│  ├─ e.$slug.tsx                 # event page (storefront)
+│  ├─ checkout.success.tsx, checkout.cancel.tsx
+│  ├─ t.$ticketCode.tsx           # digital pass
+│  ├─ passes.tsx                  # find my pass
+│  ├─ staff.tsx, staff.verify.tsx
+│  ├─ admin.login.tsx, admin.index.tsx
+│  ├─ admin.events.new.tsx, admin.events.$id.tsx, admin.events.$id.edit.tsx
 │  └─ api/stripe/webhook.ts, api/cron/expire.ts
 ├─ server/                        # createServerFn wrappers (reserve, status, verify, admin)
 └─ lib/
