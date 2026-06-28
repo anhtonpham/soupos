@@ -6,6 +6,13 @@ dist/
 *.tsbuildinfo
 next-env.d.ts
 
+# build / framework output
+.output/
+.nitro/
+.tanstack/
+.vite/
+.vercel/
+
 # local env / secrets
 .env
 .env.local
