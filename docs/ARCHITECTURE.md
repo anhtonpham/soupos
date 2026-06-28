@@ -7,439 +7,400 @@ is a credential the holder shows in person at Soupleaf; staff verify it's a real
 paid pass belonging to that person.
 
 The driving problem: the previous tool (Luma) **oversold** — 20 allocated, 65
-sold. That is almost always a *read-modify-write race condition*: many checkout
-requests each read "sold < limit" at the same moment, all see room, and all
-insert. The fix is to make the check-and-claim **atomic** so two buyers can never
-both claim the last seat.
+sold. That's a read-modify-write race: many checkout requests each read
+"sold < limit" at the same instant, all see room, all insert. The fix is to make
+the check-and-claim **atomic** so two buyers can never both claim the last seat.
 
 ### Goals
 
-1. **Never sell more than allocated. Ever.** This is the one hard invariant.
+1. **Never sell more than allocated. Ever.** The one hard invariant.
 2. **Seamless for the buyer:** drop page → countdown → buy → pay → instant digital
-   pass with a QR code.
-3. **Seamless for staff:** open a page, scan/lookup the customer's pass, see
-   VALID + the holder's name to confirm identity. No daily limits, no counters —
-   just authenticity verification.
+   pass with a QR code (synchronous fulfillment, no waiting).
+3. **Seamless for staff:** open a page, scan/lookup the pass, see VALID + the
+   holder's name to confirm identity. No daily limits — authenticity only.
 4. **Simple to operate and cheap to run** at this scale (tens to low hundreds of
    passes per drop).
 
-### Explicit non-goals (per current scope)
+### Non-goals (current scope)
 
-- **No per-day / per-use redemption tracking.** A scan is a read-only
-  authenticity check, not a "burn." (Easy to add later if needed.)
-- No reserved seating, tiers, or transfers/resale in v1.
-- No full user-account system in v1 — buyers identify by email; admin/staff use
-  shared-secret access.
+- No per-day / per-use redemption tracking — a scan is a read-only authenticity
+  check, not a "burn." (Easy to add later.)
+- No tiers/VIP, reserved seating, or resale in v1 (single ticket type → no
+  `ticket_types` table needed).
+- No full account system — buyers identify by email; admin/staff use shared-secret
+  access.
 
 ---
 
 ## 2. Tech stack
 
-| Concern            | Choice                                  | Why |
-|--------------------|-----------------------------------------|-----|
-| Package manager    | **pnpm**                                | Requested; fast, strict. |
-| Framework          | **TanStack Start** (React, Vite, Nitro) | Requested. Type-safe routing, `createServerFn` RPC, server routes for the webhook, SSR. |
-| ORM                | **Drizzle ORM** (`pg-core`)             | Requested. Typed schema, SQL-first — easy to express the exact locking query. |
-| Database           | **PlanetScale Postgres**                | Requested. Standard Postgres → `SELECT … FOR UPDATE` row locking works as-is. |
-| Payments           | **Stripe Checkout** + webhooks          | Hosted card UI, Apple/Google Pay, receipts, refunds out of the box. |
-| Hosting            | **Vercel** (TanStack Start + Nitro)     | Requested. Server functions/routes run as Vercel Functions. |
-| QR                 | `qrcode` (render) + `html5-qrcode`/BarcodeDetector (scan) | Generate pass QR server-side; scan in the staff browser. |
+| Concern         | Choice                                   |
+|-----------------|------------------------------------------|
+| Package manager | **pnpm**                                 |
+| Framework       | **TanStack Start** (React, Vite, Nitro)  |
+| ORM             | **Drizzle ORM** (`pg-core`)              |
+| Database        | **PlanetScale Postgres**                 |
+| Payments        | **Stripe** (Checkout, synchronous fulfillment + webhook backstop) |
+| Hosting         | **Vercel** (+ Vercel Cron for hold cleanup) |
+| QR              | `qrcode` (render) + browser BarcodeDetector/`html5-qrcode` (scan) |
 
 ---
 
-## 3. The core guarantee: how we make overselling impossible
+## 3. Data model (events / users / orders / tickets)
 
-Everything else is plumbing. This section is the point of the project.
+The model: an **order** starts as a reservation/hold; on payment it becomes
+**paid** and issues **tickets** (the QR credentials). Inventory is tracked with
+**counters on the event**, guarded by `CHECK` constraints.
 
-### 3.1 The bug we're preventing
+```sql
+CREATE TABLE users (
+    id         BIGSERIAL PRIMARY KEY,
+    email      TEXT UNIQUE NOT NULL,
+    name       TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE events (
+    id             BIGSERIAL PRIMARY KEY,
+    slug           TEXT UNIQUE NOT NULL,           -- e.g. "summer-2026"
+    name           TEXT NOT NULL,
+    description    TEXT,
+    sale_starts_at TIMESTAMPTZ NOT NULL,           -- when the drop opens
+    sale_ends_at   TIMESTAMPTZ,
+    price_cents    INTEGER NOT NULL DEFAULT 0,
+    currency       TEXT NOT NULL DEFAULT 'usd',
+
+    ticket_limit   INTEGER NOT NULL,               -- the hard cap
+    reserved_count INTEGER NOT NULL DEFAULT 0,     -- claimed: pending OR paid
+    paid_count     INTEGER NOT NULL DEFAULT 0,     -- actually paid
+
+    hold_minutes   INTEGER NOT NULL DEFAULT 10,
+    max_per_user   INTEGER NOT NULL DEFAULT 1,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CHECK (ticket_limit   >= 0),
+    CHECK (reserved_count >= 0),
+    CHECK (paid_count     >= 0),
+    CHECK (reserved_count <= ticket_limit),   -- can't oversell holds
+    CHECK (paid_count     <= reserved_count)  -- can't pay for an unheld seat
+);
+
+CREATE TABLE orders (
+    id                BIGSERIAL PRIMARY KEY,
+    event_id          BIGINT NOT NULL REFERENCES events(id),
+    user_id           BIGINT NOT NULL REFERENCES users(id),
+    quantity          INTEGER NOT NULL DEFAULT 1,
+    status            TEXT NOT NULL DEFAULT 'pending',
+    amount_cents      INTEGER,
+    payment_intent_id TEXT,
+    checkout_session_id TEXT,
+    idempotency_key   TEXT UNIQUE,                 -- de-dupe double Buy clicks
+    expires_at        TIMESTAMPTZ NOT NULL,        -- hold deadline
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    paid_at           TIMESTAMPTZ,
+    CHECK (quantity > 0),
+    CHECK (status IN ('pending','paid','failed','expired','cancelled','refunded'))
+);
+
+CREATE TABLE tickets (
+    id          BIGSERIAL PRIMARY KEY,
+    order_id    BIGINT NOT NULL REFERENCES orders(id),
+    event_id    BIGINT NOT NULL REFERENCES events(id),
+    user_id     BIGINT NOT NULL REFERENCES users(id),
+    ticket_code TEXT UNIQUE NOT NULL,              -- the QR token (unguessable)
+    status      TEXT NOT NULL DEFAULT 'valid',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (status IN ('valid','cancelled','refunded'))
+);
+```
+
+**Counters as inventory.** `reserved_count` = pending + paid (everything claimed);
+`paid_count` = paid. The event is "sold out" when `reserved_count = ticket_limit`,
+even if some of those are still pending payment. The `CHECK` constraints make any
+counter drift a **loud failure rather than a silent oversell**.
+
+**Why `tickets` is included:** the "show your pass in person" feature *is* QR codes
++ check-in, the exact case where a tickets table is warranted. One paid order issues
+`quantity` tickets; each `ticket_code` is the QR. No "used" status because there's
+no per-visit burn — verification is read-only.
+
+---
+
+## 4. The core guarantee: how we make overselling impossible
+
+### 4.1 The bug we're preventing
 
 ```
-Request A: SELECT count(*) … → 19   (room! 19 < 20)
-Request B: SELECT count(*) … → 19   (room! 19 < 20)   ← read at the same instant
-Request A: INSERT pass                → now 20
-Request B: INSERT pass                → now 21   ← OVERSOLD
+Req A: read "19 < 20" ✓      Req B: read "19 < 20" ✓   (same instant)
+Req A: INSERT → 20           Req B: INSERT → 21  ← OVERSOLD
 ```
 
-Application-level checks (`if (sold < limit)`) don't fix this, because the gap
-between *read* and *insert* lets other requests slip in. This is what bit Luma.
+An app-level `if (sold < limit)` can't fix this; the gap between read and write
+lets others slip in. This is what bit Luma.
 
-### 3.2 The fix: serialize claims with a row lock
+### 4.2 The fix: one atomic conditional UPDATE
 
-We take a **row-level lock on the drop** for the duration of each reservation, so
-the *count-check-insert* runs as one indivisible step. Postgres makes concurrent
-claimers wait their turn on that single row:
+The lock is the database row itself — a single statement that claims a seat only
+if there's room:
 
-```ts
-// inside db.transaction(...)   — one DB connection, one transaction
-await tx.execute(sql`
-  SELECT id FROM drops WHERE slug = ${slug} FOR UPDATE
-`); // ← any other reservation for THIS drop now blocks here until we COMMIT
-
-const [{ active }] = await tx.execute(sql`
-  SELECT count(*)::int AS active
-  FROM passes
-  WHERE drop_id = ${dropId}
-    AND (status = 'paid'
-         OR (status = 'reserved' AND hold_expires_at > now()))
-`);
-
-if (active >= totalAllocated) {
-  // no room → return SOLD_OUT, transaction rolls back
-} else {
-  await tx.insert(passes).values({ ...reservedHold });
-}
-// COMMIT releases the lock; the next waiting claimer proceeds
+```sql
+UPDATE events
+SET reserved_count = reserved_count + $qty
+WHERE id = $event_id
+  AND reserved_count + $qty <= ticket_limit
+RETURNING id;
 ```
 
-Because claimers are serialized on the drop row, two buyers can **never** both
-pass the `active < totalAllocated` check for the same seat. The invariant holds
-no matter how many requests arrive simultaneously.
+Postgres locks the row it updates and re-checks the `WHERE` under that lock, so
+concurrent claimers are serialized on it. **Row returned → reserved. No row →
+sold out.** If 500 people click at once on a 20-seat event, at most 20 UPDATEs
+succeed; everyone else gets no row. No app logic can race it.
 
-### 3.3 Is "just database locking" really enough at this scale? — Yes.
+### 4.3 Is "just DB locking" enough at this scale? — Yes.
 
-You asked whether relying on DB locking is acceptable. For this use case it's not
-just acceptable, it's the **correct, standard** approach:
+It's the correct, standard approach, not a compromise:
 
-- The locked section is a couple of indexed queries + one insert — **well under a
-  millisecond** per reservation. One drop row can comfortably serialize hundreds
-  of reservations/second. A 20–200 pass drop with a few hundred people hammering
-  "Buy" is trivially within that envelope.
-- It's **provably correct** and simple to reason about — no eventual-consistency
-  edge cases, no custom counters to keep in sync.
-- The lock scope is **per drop row**, so different drops never contend with each
-  other.
-
-**The one rule:** the lock only protects you *inside a transaction on a single
-connection*. Drizzle's `db.transaction()` guarantees that. On Vercel + PlanetScale
-we use PlanetScale's **pooled** connection string; a transaction borrows one
-backend connection for its whole duration, so `FOR UPDATE` behaves exactly as
-intended. (We keep the per-instance pool small and let PlanetScale's pooler fan
-in — see §9.)
+- The claim is a **single O(1) statement** — well under a millisecond. One event
+  row easily serializes hundreds of reservations/second; a 20–200 seat drop with
+  a few hundred simultaneous buyers is trivially within range.
+- **Single-statement** locking is especially robust on **Vercel + PlanetScale's
+  connection pooler** — there's no multi-statement transaction holding a lock
+  across a pooled-connection boundary; the critical section is one round trip.
+- The `CHECK` constraints are a hard backstop: the database itself refuses to let
+  `reserved_count` exceed `ticket_limit`.
 
 **When you'd outgrow it** (not now): sustained thousands of writes/sec contending
-on a *single* row. The upgrade path is well-trodden — atomic counter column,
-sharded counters, or a queue/"waiting room" — but for Soupleaf's scale that would
-be over-engineering. We'll note the seam so it's easy to revisit.
-
-### 3.4 Why we still "hold" inventory during checkout (recommended)
-
-Stripe Checkout takes the buyer 30–120 seconds. Two ways to handle a seat during
-that window:
-
-- **A. Reserve-with-hold (recommended).** On "Buy", atomically claim a
-  `reserved` pass with `hold_expires_at = now() + 30 min`, *then* send them to
-  Stripe. The webhook flips it to `paid`. Counts stay accurate; nobody pays for a
-  seat that's already gone.
-- **B. No hold (simplest, but bad for a drop).** Let everyone into Stripe, only
-  check capacity at the webhook, and **refund** whoever didn't make the cut. For
-  a 20-seat hyped drop this means potentially *charging and refunding ~180
-  people* — a support nightmare and a flood of Stripe fees. It re-creates Luma-
-  style chaos, just in refund form.
-
-We recommend **A**. The cost is one extra column (`hold_expires_at`) and a status
-enum — minimal complexity for a much better experience.
-
-**Holds expire lazily — no cron needed.** Expiry isn't a job; it's just a `WHERE`
-clause. The capacity query only counts `paid` rows plus `reserved` rows whose
-hold hasn't passed. An abandoned cart simply stops counting after 30 minutes.
-(An optional nightly Vercel Cron can mark stale `reserved` rows `expired` purely
-for tidy reporting — not required for correctness.)
-
-### 3.5 The webhook is the final backstop
-
-Even with holds, confirm capacity again at payment time (same row lock). Normal
-case: the hold is still valid → mark `paid`. Rare edge (hold expired, payment
-landed late): if there's still room, honor it; if not, **auto-refund** and tell
-the buyer. This guarantees the invariant *across the payment boundary*, not just
-at reservation time. Confirmation is **idempotent** (Stripe retries webhooks):
-re-processing an already-`paid` pass is a no-op, and we de-dupe on Stripe's event
-id.
+on one row → move to sharded counters or a queue/"waiting room." Over-engineering
+for Soupleaf today; we'll keep the seam clean.
 
 ---
 
-## 4. Data model (Drizzle, Postgres)
+## 5. Payments: synchronous fulfillment + webhook backstop
 
-`src/lib/db/schema.ts`
+We fulfill **in the request** (instant pass, no polling) and keep the webhook only
+as a safety net.
 
-```ts
-export const passStatus = pgEnum('pass_status',
-  ['reserved', 'paid', 'expired', 'cancelled', 'refunded']);
+### 5.1 Primary path — Stripe Checkout, verified on the success redirect
 
-export const drops = pgTable('drops', {
-  id:             uuid('id').primaryKey().defaultRandom(),
-  slug:           text('slug').notNull().unique(),          // e.g. "summer-2026"
-  name:           text('name').notNull(),
-  description:    text('description'),
-  totalAllocated: integer('total_allocated').notNull(),     // the hard cap
-  priceCents:     integer('price_cents').notNull().default(0),
-  currency:       text('currency').notNull().default('usd'),
-  saleStartsAt:   timestamp('sale_starts_at', { withTimezone: true }).notNull(),
-  saleEndsAt:     timestamp('sale_ends_at',   { withTimezone: true }),
-  holdMinutes:    integer('hold_minutes').notNull().default(30),
-  maxPerEmail:    integer('max_per_email').notNull().default(1),
-  createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
-
-export const passes = pgTable('passes', {
-  id:                  uuid('id').primaryKey().defaultRandom(),
-  dropId:              uuid('drop_id').notNull().references(() => drops.id, { onDelete: 'cascade' }),
-  status:              passStatus('status').notNull().default('reserved'),
-  holderName:          text('holder_name').notNull(),       // identity shown to staff
-  holderEmail:         text('holder_email').notNull(),
-  qrToken:             text('qr_token').unique(),           // issued on payment
-  holdExpiresAt:       timestamp('hold_expires_at', { withTimezone: true }),
-  stripeSessionId:     text('stripe_session_id').unique(),
-  stripePaymentIntent: text('stripe_payment_intent'),
-  amountPaidCents:     integer('amount_paid_cents'),
-  createdAt:           timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  paidAt:              timestamp('paid_at',    { withTimezone: true }),
-}, (t) => ({
-  dropStatusIdx: index('passes_drop_status_idx').on(t.dropId, t.status),
-  dropEmailIdx:  index('passes_drop_email_idx').on(t.dropId, t.holderEmail),
-}));
-
-// Idempotency / audit for Stripe webhook retries.
-export const webhookEvents = pgTable('webhook_events', {
-  id:         text('id').primaryKey(),       // Stripe event id
-  type:       text('type').notNull(),
-  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
-});
+```
+1. Buy clicked → reserveSeat() (atomic UPDATE) → create pending order
+2. Create Stripe Checkout Session (client_reference_id = order_id) → redirect
+3. Buyer pays → Stripe redirects to /checkout/success?session_id={CHECKOUT_SESSION_ID}
+4. success loader: stripe.checkout.sessions.retrieve(session_id)
+        payment_status === 'paid' → markOrderPaid(order_id)   ← synchronous
+5. Pass (QR) shown immediately
 ```
 
-**A "pass" is the unit of inventory.** Active inventory =
-`status='paid' OR (status='reserved' AND hold_expires_at > now())`. There is no
-separate counter to drift out of sync — the rows *are* the count.
+(Upgrade option: Payment Element + `paymentIntents.create({ confirm: true })` to
+stay fully on-site; 3DS is a client-side step, still not a webhook.)
+
+### 5.2 Webhook = idempotent backstop only
+
+The one hole in a webhook-free design: buyer **pays, then closes the tab before
+the redirect** — synchronous fulfillment never runs. The webhook
+(`checkout.session.completed`) catches that, calling the **same** `markOrderPaid()`.
+De-duped on Stripe `event.id`. If you want zero webhook, add an "I paid but don't
+see my pass" recovery lookup that re-retrieves the session — but with real money
+the backstop is worth its few lines.
+
+### 5.3 `markOrderPaid()` — the safe transition (idempotent)
+
+```
+BEGIN;
+  rows = UPDATE orders SET status='paid', paid_at=now(), payment_intent_id=$pi
+         WHERE id=$order_id AND status='pending'
+         RETURNING event_id, quantity;
+
+  IF rows == 1:                                   -- normal: pending → paid
+      UPDATE events SET paid_count = paid_count + $quantity WHERE id=$event_id;
+      INSERT INTO tickets (...) -- $quantity rows, each a unique ticket_code
+
+  ELSE:                                           -- order wasn't pending
+      s = SELECT status FROM orders WHERE id=$order_id;
+      IF s == 'paid':  -- already fulfilled (webhook + redirect both ran) → no-op
+      ELSE:            -- expired/cancelled but payment landed late:
+          -- try to re-claim a seat with the SAME atomic guard
+          ok = UPDATE events SET reserved_count = reserved_count + $quantity
+               WHERE id=$event_id AND reserved_count + $quantity <= ticket_limit
+               RETURNING id;
+          IF ok: mark paid + paid_count += qty + issue tickets
+          ELSE:  mark 'refunded' + stripe.refunds.create(...)   -- never oversell
+COMMIT;
+```
+
+This is the key refinement over a naive "always `paid_count += 1`": we bump
+`paid_count` **only on a real `pending → paid` transition**, and the rare
+expired-but-paid case either reclaims a seat or **auto-refunds** — so we never
+oversell even across the payment boundary, and `paid_count <= reserved_count`
+always holds.
+
+### 5.4 Releasing holds (Vercel Cron, every minute)
+
+Counters need a cleanup job. Aggregate per event so multiple expiries on one event
+decrement correctly (a naive `UPDATE … FROM` would only subtract one):
+
+```sql
+WITH expired AS (
+  UPDATE orders SET status='expired'
+  WHERE status='pending' AND expires_at < now()
+  RETURNING event_id, quantity),
+agg AS (SELECT event_id, SUM(quantity) AS q FROM expired GROUP BY event_id)
+UPDATE events e SET reserved_count = reserved_count - agg.q
+FROM agg WHERE e.id = agg.event_id;
+```
+
+With synchronous fulfillment, a declined/cancelled payment can also release its
+hold immediately rather than waiting for the cron.
 
 ---
 
-## 5. Application architecture (TanStack Start)
+## 6. Application architecture (TanStack Start)
 
-### 5.1 Where logic lives
-
-- **Server functions (`createServerFn`)** — same-origin, type-safe RPC called
-  from route loaders and components. Used for: `reservePass`, `getDropStatus`,
-  `getPass`, `verifyPass`, admin queries. Input validated with **zod** via the
-  server-function validator.
-- **Server routes (`createFileRoute(...).server.handlers`)** — real HTTP
-  endpoints for *external* callers. Used for the **Stripe webhook**, which needs
-  the **raw request body** for signature verification:
+- **Server functions (`createServerFn`)** — typed RPC from loaders/components:
+  `reserveSeat`, `getEventStatus`, `getTicket`, `verifyTicket`, admin queries.
+  Inputs validated with **zod**.
+- **Server route** for the **Stripe webhook backstop** (needs the raw body for
+  signature verification):
 
   ```ts
   // src/routes/api/stripe/webhook.ts
   export const Route = createFileRoute('/api/stripe/webhook')({
-    server: {
-      handlers: {
-        POST: async ({ request }) => {
-          const raw = await request.text();                 // raw body, unparsed
-          const sig = request.headers.get('stripe-signature')!;
-          const event = stripe.webhooks.constructEvent(raw, sig, WEBHOOK_SECRET);
-          await handleStripeEvent(event);                   // → confirmPass (idempotent)
-          return new Response('ok');
-        },
-      },
-    },
+    server: { handlers: { POST: async ({ request }) => {
+      const raw = await request.text();
+      const event = stripe.webhooks.constructEvent(
+        raw, request.headers.get('stripe-signature')!, WEBHOOK_SECRET);
+      if (event.type === 'checkout.session.completed') {
+        await markOrderPaid(Number(event.data.object.client_reference_id));
+      }
+      return new Response('ok');
+    }}},
   });
   ```
 
-- **Shared domain logic** (`src/lib/inventory.ts`) — `reservePass`,
-  `confirmPass`, `verifyPass`. Plain functions imported by both server functions
-  and the webhook route (server functions can't be called *from* server routes,
-  so the real logic lives in shared utilities).
+- **Shared domain logic** (`src/lib/inventory.ts`): `reserveSeat`, `markOrderPaid`
+  — imported by both server functions and the webhook route.
 
-### 5.2 Routes / pages
+### Routes / pages
 
-| Path                       | Type           | Purpose |
-|----------------------------|----------------|---------|
-| `/` or `/drops/$slug`      | page           | Storefront: pass details, price, live "X of N left", countdown to `saleStartsAt`, Buy button. |
-| `/checkout/success`        | page           | Post-Stripe landing; polls until webhook marks the pass `paid`, then shows the pass. |
-| `/checkout/cancel`         | page           | Buyer backed out; hold expires on its own. |
-| `/p/$qrToken`              | page           | The buyer's digital pass: big QR, holder name, drop name. (Add-to-wallet later.) |
-| `/staff/verify`            | page (gated)   | Staff scanner: scan/lookup → VALID/INVALID + holder name to match the person. |
-| `/admin`                   | page (gated)   | Live dashboard: allocated / paid / active holds / available, buyer list, revenue, export CSV. |
-| `/api/stripe/webhook`      | server route   | Stripe → `confirmPass`. |
+| Path                  | Type         | Purpose |
+|-----------------------|--------------|---------|
+| `/` or `/e/$slug`     | page         | Storefront: details, price, live "X of N left", countdown, Buy. |
+| `/checkout/success`   | page         | Retrieves the session, fulfills synchronously, shows the pass. |
+| `/t/$ticketCode`      | page         | Digital pass: QR + holder name + event. |
+| `/staff/verify`       | page (gated) | Scan/lookup → VALID/INVALID + holder name. |
+| `/admin`              | page (gated) | Live counts (limit / reserved / paid / available), buyer list, CSV. |
+| `/api/stripe/webhook` | server route | Backstop → `markOrderPaid`. |
+| `/api/cron/expire`    | server route | Vercel Cron → release expired holds. |
 
-### 5.3 Suggested project structure
+### Project structure
 
 ```
-soupleaf-pass/
-├─ vite.config.ts            # tanstackStart() + viteReact() + nitro() (Vercel)
-├─ drizzle.config.ts
-├─ app.config / tsconfig.json
-├─ src/
-│  ├─ routes/
-│  │  ├─ __root.tsx
-│  │  ├─ index.tsx                  # storefront
-│  │  ├─ drops.$slug.tsx
-│  │  ├─ checkout.success.tsx
-│  │  ├─ p.$qrToken.tsx             # digital pass
-│  │  ├─ staff.verify.tsx
-│  │  ├─ admin.index.tsx
-│  │  └─ api/stripe/webhook.ts      # server route
-│  ├─ server/
-│  │  ├─ reserve.ts                 # createServerFn: reservePass + Stripe Checkout session
-│  │  ├─ drop.ts                    # createServerFn: getDropStatus
-│  │  ├─ verify.ts                  # createServerFn: verifyPass (read-only)
-│  │  └─ admin.ts                   # createServerFn: dashboard queries (gated)
-│  ├─ lib/
-│  │  ├─ db/{index.ts,schema.ts}    # drizzle client + schema
-│  │  ├─ inventory.ts               # reservePass / confirmPass (the locking core)
-│  │  ├─ stripe.ts                  # Stripe client + checkout/refund helpers
-│  │  ├─ qr.ts                      # token generation + QR rendering
-│  │  └─ auth.ts                    # admin/staff shared-secret gate
-│  └─ styles/…
-├─ drizzle/                          # generated migrations
-└─ tests/
-   ├─ concurrency.test.ts            # 65 concurrent buyers vs 20 seats → exactly 20
-   ├─ holds.test.ts                  # expired holds free capacity
-   └─ webhook-backstop.test.ts       # late payment after seat gone → auto-refund, no oversell
+src/
+├─ routes/
+│  ├─ __root.tsx, index.tsx, e.$slug.tsx
+│  ├─ checkout.success.tsx
+│  ├─ t.$ticketCode.tsx          # digital pass
+│  ├─ staff.verify.tsx, admin.index.tsx
+│  └─ api/stripe/webhook.ts, api/cron/expire.ts
+├─ server/                        # createServerFn wrappers (reserve, status, verify, admin)
+└─ lib/
+   ├─ db/{index.ts,schema.ts}     # drizzle client + schema
+   ├─ inventory.ts                # reserveSeat / markOrderPaid (the locking core)
+   ├─ stripe.ts, qr.ts, auth.ts
+drizzle/                          # generated migrations
+tests/
+   ├─ concurrency.test.ts         # 65 buyers vs 20 seats → exactly 20
+   ├─ holds.test.ts               # expired holds free capacity
+   └─ payment-backstop.test.ts    # late payment after sold out → refund, no oversell
 ```
 
 ---
 
-## 6. End-to-end flows
+## 7. End-to-end flows
 
-### 6.1 Buying a pass (happy path)
-
+**Buy (happy path):**
 ```
-Buyer → Storefront: sees "12 of 20 left", clicks Buy, enters name + email
-  → reservePass() server fn:
-       db.transaction:
-         LOCK drop row (FOR UPDATE)
-         enforce sale window + max_per_email
-         count active passes; if full → SOLD_OUT
-         INSERT pass(status=reserved, hold_expires_at=now()+30m)
-       create Stripe Checkout Session (metadata: passId)
-       return checkout URL
-  → Buyer redirected to Stripe, pays
-  → Stripe → POST /api/stripe/webhook (checkout.session.completed)
-       verify signature; de-dupe on event id
-       confirmPass(passId): LOCK drop row, re-check capacity,
-         set status=paid, issue qr_token, clear hold
-  → /checkout/success polls getPass(passId) until paid → shows QR pass
+Storefront ("12 of 20 left") → enter name+email → reserveSeat():
+   BEGIN; upsert user; atomic UPDATE events (+1 if room) → no row? SOLD_OUT;
+   INSERT order(pending, expires=now()+10m); COMMIT
+→ Stripe Checkout → pay → /checkout/success retrieves session →
+   markOrderPaid(): pending→paid, paid_count+1, issue ticket(s) → show QR
 ```
 
-### 6.2 Sold-out / race
+**Sold-out race:** every Buy after the 20th blocks on the event row, reads
+`reserved_count = 20`, gets no row → SOLD_OUT. No Stripe session, no charge.
+**65 simultaneous buyers → exactly 20 reservations.**
 
-Every "Buy" that arrives after the 20th claim blocks on the drop row lock, then
-reads `active = 20` and gets `SOLD_OUT`. No Stripe session is created; nobody is
-charged. **65 simultaneous buyers → exactly 20 reservations.**
+**Abandoned checkout:** never pays → cron expires the order, `reserved_count -= 1`,
+seat is available again.
 
-### 6.3 Abandoned checkout
-
-Buyer never pays. Hold lapses after 30 min (lazy — just stops counting). Seat is
-available again automatically.
-
-### 6.4 In-person verification (staff)
-
-```
-Staff opens /staff/verify (entered STAFF_TOKEN once, stored in cookie)
-  → scans customer's QR (or types the short code)
-  → verifyPass(qrToken) server fn (read-only):
-       found + status=paid  → VALID  (show holder name, drop, purchase date)
-       not found / not paid → INVALID
-  → staff confirms the name matches the person (ID / face). Done. No write.
-```
-
----
-
-## 7. Payments (Stripe) details
-
-- **Stripe Checkout Sessions** (hosted) — least PCI burden, supports wallets,
-  emails receipts. `mode: 'payment'`, `client_reference_id = passId`,
-  `metadata.passId`, `success_url`/`cancel_url` to our pages,
-  `expires_at` ≈ aligned to the hold window.
-- **Webhook** `checkout.session.completed` → `confirmPass`. Also handle
-  `checkout.session.expired` → mark the reserved pass `expired` (optional;
-  lazy expiry already covers correctness).
-- **Idempotency:** insert the Stripe `event.id` into `webhook_events`; if it's
-  already there, skip. `confirmPass` is itself idempotent.
-- **Refund backstop:** if `confirmPass` finds no capacity (rare late-payment
-  edge), call Stripe refund and set status `refunded`.
-- **Test mode now, live later:** build against `sk_test_…`; flip env vars to live
-  keys at go-time. Local webhook testing via the Stripe CLI (`stripe listen
-  --forward-to localhost:3000/api/stripe/webhook`).
+**Staff verify:** scan QR → `verifyTicket(code)` (read-only) → `valid` →
+show holder name; staff confirms the person matches. No write.
 
 ---
 
 ## 8. Identity, access & security
 
-- **Pass = bearer credential.** The QR encodes an unguessable random
-  `qr_token`. Verification binds it to a **holder name** so staff confirm the
-  person matches. (Optional later: a selfie/photo on the pass, or name-on-ID
-  check, to harden against someone forwarding their QR.)
-- **Admin/staff gating (v1, deliberately simple):** `ADMIN_TOKEN` / `STAFF_TOKEN`
-  env secrets entered once and kept in an httpOnly cookie; server functions for
-  those areas check it. Clean upgrade path to real auth (Better-Auth/Clerk) later
-  without touching the inventory core.
-- **Webhook** verified via Stripe signature — never trust an unsigned POST.
-- **Abuse controls (optional for a hot drop):** per-IP rate limiting on
-  `reservePass`, `max_per_email`, and optionally a Turnstile/hCaptcha on the Buy
-  button to blunt scripted grabbing.
-- **Secrets** only in Vercel env vars; never shipped to the client. `qr_token`
-  values are capabilities — treat like passwords (TLS only, not logged).
+- **Pass = bearer credential.** QR encodes an unguessable `ticket_code`, bound to
+  a **holder name** so staff confirm identity. (Optional later: a photo on the pass.)
+- **Admin/staff gating (v1):** `ADMIN_TOKEN` / `STAFF_TOKEN` env secrets in an
+  httpOnly cookie; gated server functions check them. Clean upgrade to real auth
+  later without touching the inventory core.
+- **Webhook** verified via Stripe signature.
+- **Abuse controls (optional for a hot drop):** per-IP rate limit on `reserveSeat`,
+  `max_per_user`, optional Turnstile/hCaptcha on Buy.
+- **Secrets** only in Vercel env vars; `ticket_code` treated like a password.
 
 ---
 
 ## 9. Deployment (Vercel + PlanetScale)
 
-- **Vercel build:** `vite.config.ts` uses `tanstackStart()`, `viteReact()`, and
-  `nitro()`; Nitro emits Vercel Functions automatically. Fluid Compute on by
-  default.
-- **Connections:** use PlanetScale's **pooled** `DATABASE_URL`
-  (`sslmode=require`). Driver: `postgres` (postgres.js) + `drizzle-orm/postgres-js`,
-  with a **small per-instance pool** (`max: 1–2`) and `prepare: false` if behind
-  the transaction pooler — PlanetScale's pooler fans many serverless instances
-  into the database. Transactions (and thus `FOR UPDATE`) work normally.
-- **Migrations:** authored with Drizzle Kit (`db:generate`), applied with
-  `db:migrate` as a deploy step (CI or a one-off), ideally through a PlanetScale
-  branch → promote workflow so schema changes are reviewed before prod.
-- **Env vars** (see `.env.example`): `DATABASE_URL`, `STRIPE_SECRET_KEY`,
-  `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`, `APP_BASE_URL`,
-  `ADMIN_TOKEN`, `STAFF_TOKEN`.
+- **Build:** `vite.config.ts` = `tanstackStart()` + `viteReact()` + `nitro()`;
+  Nitro emits Vercel Functions.
+- **DB driver:** PlanetScale **pooled** `DATABASE_URL` (`sslmode=require`) with
+  `postgres` (postgres.js) + `drizzle-orm/postgres-js`; small per-instance pool
+  (`max: 1–2`), `prepare: false` behind the transaction pooler. The single-statement
+  reservation lock works cleanly through the pooler.
+- **Migrations:** Drizzle Kit (`db:generate` → `db:migrate`), applied as a deploy
+  step, ideally via a PlanetScale branch → promote.
+- **Cron:** Vercel Cron hits `/api/cron/expire` every minute (secured by a secret).
+- **Env vars:** see `.env.example`.
 
 ---
 
-## 10. How we prove it works (tests)
+## 10. How we prove it works (tests, real Postgres)
 
-The anti-oversell core ships with automated tests run against a real Postgres:
-
-1. **`concurrency.test.ts`** — seed a 20-seat drop, fire **65 concurrent**
-   `reservePass()` calls. Assert **exactly 20** succeed, **45** get `SOLD_OUT`,
-   and the DB active count is **20**. (This is the literal Luma scenario, proven
-   safe.)
-2. **`holds.test.ts`** — fill the drop with short holds; assert new buyers get
-   `SOLD_OUT`, then after holds lapse the seats free up.
-3. **`webhook-backstop.test.ts`** — a hold expires, another buyer takes the last
-   seat and pays; the first buyer's payment lands late → `confirmPass` returns
-   `NO_CAPACITY`, triggers a refund, and the paid count stays at the cap.
-4. **`max-per-email`** — second active pass for the same email is rejected.
-
-CI runs these on every push; locally `pnpm test` against a dev Postgres.
+1. **`concurrency.test.ts`** — 20-seat event, **65 concurrent** `reserveSeat()` →
+   assert **exactly 20** succeed, **45** SOLD_OUT, and `reserved_count = 20`.
+   (The literal Luma scenario, proven safe.)
+2. **`holds.test.ts`** — fill with short holds → new buyers SOLD_OUT → after the
+   cleanup runs, seats free up.
+3. **`payment-backstop.test.ts`** — hold expires, another buyer takes the last
+   seat and pays, first buyer's payment lands late → `markOrderPaid` reclaims-or-
+   refunds; `paid_count` never exceeds `ticket_limit`.
+4. **`max-per-user`** — second active order for the same user is rejected.
 
 ---
 
 ## 11. Build milestones
 
-1. **Scaffold:** pnpm + TanStack Start + Vite/Nitro, Drizzle, schema + first
+1. **Scaffold:** pnpm + TanStack Start (Vite/Nitro), Drizzle, schema + first
    migration, DB client, `.env`.
-2. **Inventory core + tests:** `reservePass` / `confirmPass` with row locking;
-   land the concurrency tests green. *(This is the critical piece — build and
-   prove it first.)*
-3. **Stripe:** Checkout session creation + webhook route + idempotency + refund
-   backstop.
-4. **Buyer UX:** storefront with live counts + countdown, success page polling,
-   digital QR pass page.
-5. **Staff verify:** scanner page + `verifyPass`.
-6. **Admin dashboard:** live counts, buyer list, CSV export, gating.
-7. **Deploy:** Vercel + PlanetScale, live Stripe keys, smoke test the full drop.
+2. **Inventory core + tests:** `reserveSeat` / `markOrderPaid` (atomic UPDATE +
+   guarded transition); land the concurrency tests green. *(Build & prove first.)*
+3. **Stripe:** Checkout session + synchronous success fulfillment + idempotent
+   webhook backstop + refund path; Vercel Cron expiry.
+4. **Buyer UX:** storefront (live counts + countdown), success page, QR pass.
+5. **Staff verify:** scanner + `verifyTicket`.
+6. **Admin dashboard:** live counts, buyer list, CSV, gating.
+7. **Deploy:** Vercel + PlanetScale, live Stripe keys, smoke-test a full drop.
 
 ---
 
 ## 12. Decisions to confirm before building
 
-1. **Holds (§3.4):** recommend **A (reserve-with-hold)**. Confirm, or pick B.
-2. **Identity strength (§8):** name-only on the pass for v1, or add an optional
-   **photo** to the pass for stronger in-person identity matching?
-3. **Per-email limit:** default **1 pass per email** — correct, or allow more?
-4. **Drop config:** allocation (20?), price, and the on-sale date/time for the
-   first real drop.
+1. **Payments:** Stripe Checkout + synchronous success fulfillment + webhook
+   backstop (recommended), or fully on-site Payment Element?
+2. **Identity strength:** name-only on the pass for v1, or add an optional **photo**?
+3. **Per-user limit:** default **1 per email/user**?
+4. **First drop config:** allocation (20?), price, and on-sale date/time.
