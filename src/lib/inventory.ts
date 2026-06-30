@@ -244,6 +244,188 @@ export async function markOrderPaid(input: MarkPaidInput): Promise<PaidResult> {
 }
 
 // ---------------------------------------------------------------------------
+// Admin mutations (operate on the existing schema — no new tables/columns).
+// ---------------------------------------------------------------------------
+
+export interface UpdateEventInput {
+  name?: string;
+  description?: string | null;
+  priceCents?: number;
+  saleStartsAt?: Date;
+  saleEndsAt?: Date | null;
+  holdMinutes?: number;
+  maxPerUser?: number;
+  ticketLimit?: number;
+}
+
+export type UpdateEventResult =
+  | { ok: true }
+  | { ok: false; reason: 'NOT_FOUND' | 'LIMIT_BELOW_CLAIMED'; floor?: number };
+
+/**
+ * Edits an event's config. Changing `ticketLimit` adjusts the physical seat
+ * rows: growing inserts new `free` rows, shrinking deletes spare `free` rows —
+ * but never below the number already sold or actively held (the floor), so the
+ * oversell invariant is preserved.
+ */
+export async function updateEvent(
+  id: number,
+  patch: UpdateEventInput,
+): Promise<UpdateEventResult> {
+  try {
+    return await db.transaction(async (tx) => {
+      const [ev] = await tx.select().from(events).where(eq(events.id, id));
+      if (!ev) throw new ReserveAbort('NOT_FOUND');
+
+      if (patch.ticketLimit != null && patch.ticketLimit !== ev.ticketLimit) {
+        const counts = rowsOf(
+          await tx.execute(sql`
+            SELECT
+              count(*)::int AS total,
+              count(*) FILTER (WHERE status = 'sold'
+                OR (status = 'held' AND held_until > now()))::int AS claimed,
+              count(*) FILTER (WHERE status = 'free'
+                OR (status = 'held' AND held_until <= now()))::int AS spare
+            FROM tickets WHERE event_id = ${id}
+          `),
+        )[0];
+        const total = Number(counts?.total ?? 0);
+        const claimed = Number(counts?.claimed ?? 0);
+        const spare = Number(counts?.spare ?? 0);
+
+        if (patch.ticketLimit < claimed) {
+          // Can't shrink below what's already sold/held.
+          throw Object.assign(new ReserveAbort('LIMIT_BELOW_CLAIMED'), { floor: claimed });
+        }
+        if (patch.ticketLimit > total) {
+          await tx.execute(sql`
+            INSERT INTO tickets (event_id, status)
+            SELECT ${id}, 'free' FROM generate_series(1, ${patch.ticketLimit - total})
+          `);
+        } else if (patch.ticketLimit < total) {
+          // Delete the right number of releasable (free/expired) rows only.
+          const toRemove = Math.min(total - patch.ticketLimit, spare);
+          await tx.execute(sql`
+            DELETE FROM tickets WHERE id IN (
+              SELECT id FROM tickets
+              WHERE event_id = ${id}
+                AND (status = 'free' OR (status = 'held' AND held_until <= now()))
+              ORDER BY id DESC
+              LIMIT ${toRemove}
+            )
+          `);
+        }
+      }
+
+      await tx
+        .update(events)
+        .set({
+          ...(patch.name != null ? { name: patch.name } : {}),
+          ...(patch.description !== undefined ? { description: patch.description } : {}),
+          ...(patch.priceCents != null ? { priceCents: patch.priceCents } : {}),
+          ...(patch.saleStartsAt != null ? { saleStartsAt: patch.saleStartsAt } : {}),
+          ...(patch.saleEndsAt !== undefined ? { saleEndsAt: patch.saleEndsAt } : {}),
+          ...(patch.holdMinutes != null ? { holdMinutes: patch.holdMinutes } : {}),
+          ...(patch.maxPerUser != null ? { maxPerUser: patch.maxPerUser } : {}),
+          ...(patch.ticketLimit != null ? { ticketLimit: patch.ticketLimit } : {}),
+        })
+        .where(eq(events.id, id));
+
+      return { ok: true as const };
+    });
+  } catch (e) {
+    if (e instanceof ReserveAbort) {
+      return {
+        ok: false as const,
+        reason: e.message as 'NOT_FOUND' | 'LIMIT_BELOW_CLAIMED',
+        floor: (e as { floor?: number }).floor,
+      };
+    }
+    throw e;
+  }
+}
+
+export interface OrderRow {
+  id: number;
+  buyerName: string | null;
+  email: string;
+  ticketCode: string | null;
+  status: string;
+  amountCents: number | null;
+  createdAt: Date;
+}
+
+/** Buyer/orders list for an event's admin drop-detail screen. */
+export async function listOrders(eventId: number): Promise<OrderRow[]> {
+  return rowsOf(
+    await db.execute(sql`
+      SELECT o.id, o.status, o.amount_cents, o.created_at,
+             u.name AS buyer_name, u.email,
+             t.ticket_code
+      FROM orders o
+      JOIN users u ON u.id = o.user_id
+      LEFT JOIN tickets t ON t.order_id = o.id AND t.status = 'sold'
+      WHERE o.event_id = ${eventId}
+      ORDER BY o.created_at DESC
+    `),
+  ).map((r) => ({
+    id: Number(r.id),
+    buyerName: r.buyer_name ?? null,
+    email: r.email,
+    ticketCode: r.ticket_code ?? null,
+    status: r.status,
+    amountCents: r.amount_cents ?? null,
+    createdAt: r.created_at,
+  }));
+}
+
+/**
+ * Refunds a paid order: releases its seat back to `free` (resellable) and marks
+ * the order `refunded`. Returns the payment intent so the caller can issue the
+ * Stripe refund. Idempotent-ish: a non-paid order is left alone.
+ */
+export async function refundOrder(
+  orderId: number,
+): Promise<{ ok: true; paymentIntentId: string | null } | { ok: false; reason: 'NOT_FOUND' | 'NOT_PAID' }> {
+  return db.transaction(async (tx) => {
+    const [order] = rowsOf(
+      await tx.execute(sql`SELECT id, status, payment_intent_id FROM orders WHERE id = ${orderId} FOR UPDATE`),
+    ) as { id: number; status: string; payment_intent_id: string | null }[];
+    if (!order) return { ok: false as const, reason: 'NOT_FOUND' };
+    if (order.status !== 'paid') return { ok: false as const, reason: 'NOT_PAID' };
+
+    await tx.execute(sql`
+      UPDATE tickets
+      SET status = 'free', order_id = NULL, user_id = NULL, ticket_code = NULL, sold_at = NULL, held_until = NULL
+      WHERE order_id = ${orderId}
+    `);
+    await tx.execute(sql`UPDATE orders SET status = 'refunded' WHERE id = ${orderId}`);
+    return { ok: true as const, paymentIntentId: order.payment_intent_id ?? null };
+  });
+}
+
+/** Cancels a pending order's hold: releases the held seat and marks it cancelled. */
+export async function cancelHold(
+  orderId: number,
+): Promise<{ ok: true } | { ok: false; reason: 'NOT_FOUND' | 'NOT_PENDING' }> {
+  return db.transaction(async (tx) => {
+    const [order] = rowsOf(
+      await tx.execute(sql`SELECT id, status FROM orders WHERE id = ${orderId} FOR UPDATE`),
+    ) as { id: number; status: string }[];
+    if (!order) return { ok: false as const, reason: 'NOT_FOUND' };
+    if (order.status !== 'pending') return { ok: false as const, reason: 'NOT_PENDING' };
+
+    await tx.execute(sql`
+      UPDATE tickets
+      SET status = 'free', order_id = NULL, user_id = NULL, held_until = NULL
+      WHERE order_id = ${orderId} AND status = 'held'
+    `);
+    await tx.execute(sql`UPDATE orders SET status = 'cancelled' WHERE id = ${orderId}`);
+    return { ok: true as const };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Read-only helpers used by pages / server functions.
 // ---------------------------------------------------------------------------
 
@@ -297,6 +479,13 @@ export async function getEventStatus(slug: string): Promise<EventStatus | null> 
 
 export async function listEvents(): Promise<(typeof events.$inferSelect)[]> {
   return db.select().from(events).orderBy(events.saleStartsAt);
+}
+
+/** Same as getEventStatus but keyed by numeric id (admin drop-detail route). */
+export async function getEventStatusById(id: number): Promise<EventStatus | null> {
+  const [ev] = await db.select().from(events).where(eq(events.id, id));
+  if (!ev) return null;
+  return getEventStatus(ev.slug);
 }
 
 /**
