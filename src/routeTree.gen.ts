@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as StaffRouteImport } from './routes/staff'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as TTicketCodeRouteImport } from './routes/t.$ticketCode'
@@ -16,9 +17,18 @@ import { Route as StaffVerifyRouteImport } from './routes/staff.verify'
 import { Route as ESlugRouteImport } from './routes/e.$slug'
 import { Route as CheckoutSuccessRouteImport } from './routes/checkout.success'
 import { Route as CheckoutCancelRouteImport } from './routes/checkout.cancel'
+import { Route as AdminLoginRouteImport } from './routes/admin.login'
 import { Route as ApiStripeWebhookRouteImport } from './routes/api/stripe/webhook'
 import { Route as ApiCronExpireRouteImport } from './routes/api/cron/expire'
+import { Route as AdminEventsNewRouteImport } from './routes/admin.events.new'
+import { Route as AdminEventsIdRouteImport } from './routes/admin.events.$id'
+import { Route as AdminEventsIdEditRouteImport } from './routes/admin.events.$id.edit'
 
+const StaffRoute = StaffRouteImport.update({
+  id: '/staff',
+  path: '/staff',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -35,9 +45,9 @@ const TTicketCodeRoute = TTicketCodeRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const StaffVerifyRoute = StaffVerifyRouteImport.update({
-  id: '/staff/verify',
-  path: '/staff/verify',
-  getParentRoute: () => rootRouteImport,
+  id: '/verify',
+  path: '/verify',
+  getParentRoute: () => StaffRoute,
 } as any)
 const ESlugRoute = ESlugRouteImport.update({
   id: '/e/$slug',
@@ -54,6 +64,11 @@ const CheckoutCancelRoute = CheckoutCancelRouteImport.update({
   path: '/checkout/cancel',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminLoginRoute = AdminLoginRouteImport.update({
+  id: '/admin/login',
+  path: '/admin/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiStripeWebhookRoute = ApiStripeWebhookRouteImport.update({
   id: '/api/stripe/webhook',
   path: '/api/stripe/webhook',
@@ -64,91 +79,146 @@ const ApiCronExpireRoute = ApiCronExpireRouteImport.update({
   path: '/api/cron/expire',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminEventsNewRoute = AdminEventsNewRouteImport.update({
+  id: '/admin/events/new',
+  path: '/admin/events/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminEventsIdRoute = AdminEventsIdRouteImport.update({
+  id: '/admin/events/$id',
+  path: '/admin/events/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminEventsIdEditRoute = AdminEventsIdEditRouteImport.update({
+  id: '/edit',
+  path: '/edit',
+  getParentRoute: () => AdminEventsIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/staff': typeof StaffRouteWithChildren
+  '/admin/login': typeof AdminLoginRoute
   '/checkout/cancel': typeof CheckoutCancelRoute
   '/checkout/success': typeof CheckoutSuccessRoute
   '/e/$slug': typeof ESlugRoute
   '/staff/verify': typeof StaffVerifyRoute
   '/t/$ticketCode': typeof TTicketCodeRoute
   '/admin/': typeof AdminIndexRoute
+  '/admin/events/$id': typeof AdminEventsIdRouteWithChildren
+  '/admin/events/new': typeof AdminEventsNewRoute
   '/api/cron/expire': typeof ApiCronExpireRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
+  '/admin/events/$id/edit': typeof AdminEventsIdEditRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/staff': typeof StaffRouteWithChildren
+  '/admin/login': typeof AdminLoginRoute
   '/checkout/cancel': typeof CheckoutCancelRoute
   '/checkout/success': typeof CheckoutSuccessRoute
   '/e/$slug': typeof ESlugRoute
   '/staff/verify': typeof StaffVerifyRoute
   '/t/$ticketCode': typeof TTicketCodeRoute
   '/admin': typeof AdminIndexRoute
+  '/admin/events/$id': typeof AdminEventsIdRouteWithChildren
+  '/admin/events/new': typeof AdminEventsNewRoute
   '/api/cron/expire': typeof ApiCronExpireRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
+  '/admin/events/$id/edit': typeof AdminEventsIdEditRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/staff': typeof StaffRouteWithChildren
+  '/admin/login': typeof AdminLoginRoute
   '/checkout/cancel': typeof CheckoutCancelRoute
   '/checkout/success': typeof CheckoutSuccessRoute
   '/e/$slug': typeof ESlugRoute
   '/staff/verify': typeof StaffVerifyRoute
   '/t/$ticketCode': typeof TTicketCodeRoute
   '/admin/': typeof AdminIndexRoute
+  '/admin/events/$id': typeof AdminEventsIdRouteWithChildren
+  '/admin/events/new': typeof AdminEventsNewRoute
   '/api/cron/expire': typeof ApiCronExpireRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
+  '/admin/events/$id/edit': typeof AdminEventsIdEditRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/staff'
+    | '/admin/login'
     | '/checkout/cancel'
     | '/checkout/success'
     | '/e/$slug'
     | '/staff/verify'
     | '/t/$ticketCode'
     | '/admin/'
+    | '/admin/events/$id'
+    | '/admin/events/new'
     | '/api/cron/expire'
     | '/api/stripe/webhook'
+    | '/admin/events/$id/edit'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/staff'
+    | '/admin/login'
     | '/checkout/cancel'
     | '/checkout/success'
     | '/e/$slug'
     | '/staff/verify'
     | '/t/$ticketCode'
     | '/admin'
+    | '/admin/events/$id'
+    | '/admin/events/new'
     | '/api/cron/expire'
     | '/api/stripe/webhook'
+    | '/admin/events/$id/edit'
   id:
     | '__root__'
     | '/'
+    | '/staff'
+    | '/admin/login'
     | '/checkout/cancel'
     | '/checkout/success'
     | '/e/$slug'
     | '/staff/verify'
     | '/t/$ticketCode'
     | '/admin/'
+    | '/admin/events/$id'
+    | '/admin/events/new'
     | '/api/cron/expire'
     | '/api/stripe/webhook'
+    | '/admin/events/$id/edit'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  StaffRoute: typeof StaffRouteWithChildren
+  AdminLoginRoute: typeof AdminLoginRoute
   CheckoutCancelRoute: typeof CheckoutCancelRoute
   CheckoutSuccessRoute: typeof CheckoutSuccessRoute
   ESlugRoute: typeof ESlugRoute
-  StaffVerifyRoute: typeof StaffVerifyRoute
   TTicketCodeRoute: typeof TTicketCodeRoute
   AdminIndexRoute: typeof AdminIndexRoute
+  AdminEventsIdRoute: typeof AdminEventsIdRouteWithChildren
+  AdminEventsNewRoute: typeof AdminEventsNewRoute
   ApiCronExpireRoute: typeof ApiCronExpireRoute
   ApiStripeWebhookRoute: typeof ApiStripeWebhookRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/staff': {
+      id: '/staff'
+      path: '/staff'
+      fullPath: '/staff'
+      preLoaderRoute: typeof StaffRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -172,10 +242,10 @@ declare module '@tanstack/react-router' {
     }
     '/staff/verify': {
       id: '/staff/verify'
-      path: '/staff/verify'
+      path: '/verify'
       fullPath: '/staff/verify'
       preLoaderRoute: typeof StaffVerifyRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof StaffRoute
     }
     '/e/$slug': {
       id: '/e/$slug'
@@ -198,6 +268,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CheckoutCancelRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/login': {
+      id: '/admin/login'
+      path: '/admin/login'
+      fullPath: '/admin/login'
+      preLoaderRoute: typeof AdminLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/stripe/webhook': {
       id: '/api/stripe/webhook'
       path: '/api/stripe/webhook'
@@ -212,17 +289,63 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiCronExpireRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/events/new': {
+      id: '/admin/events/new'
+      path: '/admin/events/new'
+      fullPath: '/admin/events/new'
+      preLoaderRoute: typeof AdminEventsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/events/$id': {
+      id: '/admin/events/$id'
+      path: '/admin/events/$id'
+      fullPath: '/admin/events/$id'
+      preLoaderRoute: typeof AdminEventsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/events/$id/edit': {
+      id: '/admin/events/$id/edit'
+      path: '/edit'
+      fullPath: '/admin/events/$id/edit'
+      preLoaderRoute: typeof AdminEventsIdEditRouteImport
+      parentRoute: typeof AdminEventsIdRoute
+    }
   }
 }
 
+interface StaffRouteChildren {
+  StaffVerifyRoute: typeof StaffVerifyRoute
+}
+
+const StaffRouteChildren: StaffRouteChildren = {
+  StaffVerifyRoute: StaffVerifyRoute,
+}
+
+const StaffRouteWithChildren = StaffRoute._addFileChildren(StaffRouteChildren)
+
+interface AdminEventsIdRouteChildren {
+  AdminEventsIdEditRoute: typeof AdminEventsIdEditRoute
+}
+
+const AdminEventsIdRouteChildren: AdminEventsIdRouteChildren = {
+  AdminEventsIdEditRoute: AdminEventsIdEditRoute,
+}
+
+const AdminEventsIdRouteWithChildren = AdminEventsIdRoute._addFileChildren(
+  AdminEventsIdRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  StaffRoute: StaffRouteWithChildren,
+  AdminLoginRoute: AdminLoginRoute,
   CheckoutCancelRoute: CheckoutCancelRoute,
   CheckoutSuccessRoute: CheckoutSuccessRoute,
   ESlugRoute: ESlugRoute,
-  StaffVerifyRoute: StaffVerifyRoute,
   TTicketCodeRoute: TTicketCodeRoute,
   AdminIndexRoute: AdminIndexRoute,
+  AdminEventsIdRoute: AdminEventsIdRouteWithChildren,
+  AdminEventsNewRoute: AdminEventsNewRoute,
   ApiCronExpireRoute: ApiCronExpireRoute,
   ApiStripeWebhookRoute: ApiStripeWebhookRoute,
 }
