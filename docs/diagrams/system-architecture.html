@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Soupleaf Hotpot Pass — System Architecture</title>
+<style>
+  :root{
+    --ink:#16240f; --ink2:#1c2a1a; --green:#3e9b3f; --green-d:#2f7d2a;
+    --muted:#566a52; --muted2:#7c8a78; --line:#dfe8d8; --bg:#eef3ec;
+    --card:#ffffff; --amber:#a9772a; --amber-bg:#f7efdd; --red:#b3402f; --red-bg:#f7e3de;
+    --blue:#2f6b8f; --blue-bg:#e3eef5; --mono:'Space Mono','SFMono-Regular',Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink2);
+    font-family:'Figtree',system-ui,-apple-system,'Segoe UI',sans-serif;
+    -webkit-font-smoothing:antialiased;padding:36px 20px 64px}
+  .page{max-width:1120px;margin:0 auto}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;color:#7e9277}
+  h1{font-size:34px;letter-spacing:-.02em;color:var(--ink);margin:10px 0 6px}
+  .sub{color:var(--muted);font-size:15px;max-width:760px;line-height:1.5;margin:0 0 26px}
+
+  /* layers */
+  .layer{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:18px 20px 20px;box-shadow:0 3px 14px rgba(28,42,26,.05)}
+  .layer + .connector{margin-top:0}
+  .layer-tag{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.18em;
+    color:#fff;background:var(--ink);border-radius:6px;padding:4px 9px;margin-bottom:4px}
+  .layer h2{font-size:17px;margin:8px 0 2px;color:var(--ink)}
+  .layer .how{font-size:13px;color:var(--muted);margin:2px 0 14px;line-height:1.5;max-width:960px}
+
+  .cols{display:grid;gap:12px}
+  .c3{grid-template-columns:repeat(3,1fr)} .c4{grid-template-columns:repeat(4,1fr)}
+  .c2{grid-template-columns:repeat(2,1fr)}
+  .cell{border:1px solid var(--line);border-radius:11px;padding:12px 13px;background:#fbfdf9}
+  .cell h3{margin:0 0 4px;font-size:13.5px;color:var(--ink)}
+  .cell .k{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--muted2);display:block;margin-bottom:6px}
+  .cell ul{margin:6px 0 0;padding-left:0;list-style:none;font-size:12px;color:var(--muted);line-height:1.65}
+  .cell li b{color:var(--ink2);font-weight:600}
+  .cell li code, .how code, td code{font-family:var(--mono);font-size:11px;background:#eef3ec;border-radius:4px;padding:1px 5px}
+  .cell.accent{background:#f2f8ef;border-color:#cfe0c8}
+  .cell.ext{background:var(--blue-bg);border-color:#c6dbe8}
+  .cell.warn{background:var(--amber-bg);border-color:#e8d9b8}
+
+  /* connectors between layers */
+  .connector{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:6px 30px}
+  .connector.single{grid-template-columns:1fr}
+  .flow{display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--green-d)}
+  .flow .lbl{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--muted);
+    background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px 11px;white-space:nowrap}
+  .flow .arr{font-size:15px;line-height:1;color:var(--green)}
+  .flow.up .arr{transform:rotate(180deg)}
+  .flow.duo .arr::after{content:" ▲";color:#9db497}
+
+  /* numbered chips for the buy path */
+  .n{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;
+    border-radius:50%;background:var(--green);color:#fff;font-size:10.5px;font-weight:700;
+    font-family:var(--mono);margin-right:6px;flex:none;vertical-align:top;position:relative;top:1px}
+
+  /* tables layer */
+  table{border-collapse:collapse;width:100%;font-size:11.5px}
+  td{padding:3px 8px 3px 0;color:var(--muted);vertical-align:top;line-height:1.5}
+  td:first-child{font-family:var(--mono);color:var(--ink2);white-space:nowrap}
+  .pillrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .pill{font-family:var(--mono);font-size:10px;border-radius:999px;padding:3px 9px;letter-spacing:.05em}
+  .p-free{background:#e7f1e3;color:var(--green-d)} .p-held{background:var(--amber-bg);color:var(--amber)}
+  .p-sold{background:var(--ink);color:#fff} .p-x{background:#f1f0ee;color:#8a8f86}
+
+  .footer{margin-top:26px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .foot-card{border-radius:13px;padding:14px 16px;font-size:12.5px;line-height:1.6}
+  .foot-card.inv{background:var(--ink);color:#dfe8d8}
+  .foot-card.inv b{color:#fff}
+  .foot-card.test{background:#f2f8ef;border:1px solid #cfe0c8;color:var(--muted)}
+  .foot-card.test b{color:var(--green-d)}
+  .foot-card .t{font-family:var(--mono);font-size:10px;letter-spacing:.18em;display:block;margin-bottom:6px;opacity:.75}
+
+  .legend{display:flex;gap:14px;align-items:center;margin:0 0 14px;font-size:11.5px;color:var(--muted)}
+  .lg{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:11px;height:11px;border-radius:3px;border:1px solid rgba(0,0,0,.08)}
+
+  @media (max-width:880px){.c3,.c4,.c2{grid-template-columns:1fr}.connector{grid-template-columns:1fr}
+    .footer{grid-template-columns:1fr}}
+  @media print{body{background:#fff;padding:0}.layer{box-shadow:none}}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="eyebrow">SOUPLEAF · HOTPOT PASS · SYSTEM ARCHITECTURE</div>
+  <h1>How the whole system fits together</h1>
+  <p class="sub">
+    Every box below is real, shipped code in the <code>soupos</code> repo. Requests flow top to bottom:
+    people and external services at the top, one deployed app in the middle, a single Postgres database
+    as the only source of truth at the bottom. The numbered chips <span class="n">1</span>–<span class="n">8</span>
+    trace one buyer's purchase end-to-end.
+  </p>
+
+  <div class="legend">
+    <span class="lg"><span class="sw" style="background:#fbfdf9"></span> app code</span>
+    <span class="lg"><span class="sw" style="background:#f2f8ef"></span> inventory-critical path</span>
+    <span class="lg"><span class="sw" style="background:var(--blue-bg)"></span> external service</span>
+    <span class="lg"><span class="sw" style="background:var(--amber-bg)"></span> scheduled / backstop</span>
+  </div>
+
+  <!-- ======================= LAYER 1 : ACTORS ======================= -->
+  <section class="layer">
+    <span class="layer-tag">ACTORS &amp; EXTERNAL SERVICES</span>
+    <h2>Who touches the system</h2>
+    <p class="how">Three kinds of humans use the same deployed app through different pages; two external
+      services call into it over HTTPS. Nobody talks to the database directly — everything funnels
+      through the app's typed API.</p>
+    <div class="cols c4" style="grid-template-columns:repeat(5,1fr)">
+      <div class="cell"><span class="k">HUMAN</span><h3>🧑‍🍳 Buyer</h3>
+        <ul><li>Browses drops, buys a pass, shows QR in store</li><li><span class="n">1</span>clicks <b>Buy</b> on <code>/e/$slug</code></li></ul></div>
+      <div class="cell"><span class="k">HUMAN</span><h3>🧾 Staff</h3>
+        <ul><li>Phone scanner at the counter</li><li>Camera QR scan → <b>VALID + holder name</b>, read-only</li></ul></div>
+      <div class="cell"><span class="k">HUMAN</span><h3>🛠 Admin (you)</h3>
+        <ul><li>Creates/edits drops, watches live counts, refunds</li><li>Gated by <code>ADMIN_TOKEN</code></li></ul></div>
+      <div class="cell ext"><span class="k">EXTERNAL</span><h3>💳 Stripe</h3>
+        <ul><li>Hosted checkout page collects payment</li><li><span class="n">5</span>redirects buyer back · <span class="n">7</span>fires webhook backstop</li></ul></div>
+      <div class="cell ext"><span class="k">EXTERNAL</span><h3>⏰ Vercel Cron</h3>
+        <ul><li>Optional janitor, hits <code>/api/cron/expire</code></li><li>Tidies reporting — <b>never needed for correctness</b></li></ul></div>
+    </div>
+  </section>
+
+  <div class="connector">
+    <div class="flow"><span class="lbl">HTTPS · SSR pages + typed RPC</span><span class="arr">▼</span></div>
+    <div class="flow"><span class="lbl">Stripe: redirect + signed webhook POST</span><span class="arr">▼</span></div>
+    <div class="flow"><span class="lbl">Cron: GET + Bearer CRON_SECRET</span><span class="arr">▼</span></div>
+  </div>
+
+  <!-- ======================= LAYER 2 : APP ======================= -->
+  <section class="layer">
+    <span class="layer-tag">APPLICATION · TANSTACK START ON VERCEL</span>
+    <h2>One app: pages, typed API, and raw HTTP endpoints</h2>
+    <p class="how">A single TanStack Start app (React 19 + Vite, deployed as Vercel Functions via Nitro).
+      Pages are server-rendered; browser code calls the server <i>only</i> through
+      <code>createServerFn</code> RPCs whose inputs are validated with <code>zod</code>. Two endpoints that
+      external services call (Stripe, cron) are plain server routes because they need raw request bodies.</p>
+    <div class="cols c3">
+      <div class="cell"><span class="k">PAGES · SSR (src/routes)</span><h3>Buyer storefront</h3>
+        <ul>
+          <li><code>/</code> — drop grid, filters, live "X of N left"</li>
+          <li><code>/e/$slug</code> — countdown, availability bar, <b>polls every 5s</b>, buy form</li>
+          <li><code>/checkout/success</code> — <span class="n">6</span><b>fulfills synchronously</b> in its loader, reveals pass</li>
+          <li><code>/t/$code</code> — digital pass: QR + holder name</li>
+        </ul></div>
+      <div class="cell"><span class="k">PAGES · SSR</span><h3>Staff &amp; admin consoles</h3>
+        <ul>
+          <li><code>/staff</code> gate → <code>/staff/verify</code> — camera scan (<code>BarcodeDetector</code>) or manual code</li>
+          <li><code>/admin</code> — live stats, revenue, CSV export</li>
+          <li><code>/admin/events/new · $id · edit</code> — per-drop config: limit, price, sale window, hold, max/person</li>
+        </ul></div>
+      <div class="cell warn"><span class="k">SERVER ROUTES · RAW HTTP</span><h3>External entry points</h3>
+        <ul>
+          <li><code>POST /api/stripe/webhook</code> — <span class="n">7</span>reads <b>raw body</b>, verifies Stripe signature, then calls the <i>same</i> fulfillment as the success page (idempotent backstop)</li>
+          <li><code>GET /api/cron/expire</code> — janitor; releases long-expired holds for tidy reports</li>
+        </ul></div>
+    </div>
+
+    <div class="connector" style="padding:14px 30px 8px">
+      <div class="flow single" style="grid-column:1/-1"><span class="lbl">every call passes through the typed RPC layer — zod-validated, token-gated where needed</span><span class="arr">▼</span></div>
+    </div>
+
+    <div class="cols c4">
+      <div class="cell accent"><span class="k">RPC · src/server/checkout.ts</span><h3>Checkout</h3>
+        <ul><li><span class="n">2</span><b>startCheckout</b> — reserve seat → Stripe URL (or free-claim mode)</li>
+        <li><b>confirmCheckout</b> — verify session → issue pass</li></ul></div>
+      <div class="cell"><span class="k">RPC · src/server/events.ts</span><h3>Events</h3>
+        <ul><li><b>listEventsFn</b> — all drops + live counts</li><li><b>getEventStatusFn</b> — one drop's availability</li></ul></div>
+      <div class="cell"><span class="k">RPC · src/server/verify.ts</span><h3>Verify</h3>
+        <ul><li><b>getPassFn</b> — pass + rendered QR</li><li><b>verifyTicketFn</b> — staff check (<code>STAFF_TOKEN</code>), read-only</li></ul></div>
+      <div class="cell"><span class="k">RPC · src/server/admin.ts</span><h3>Admin</h3>
+        <ul><li><b>overview · detail</b></li><li><b>create · updateEventFn</b></li><li><b>refundOrderFn · cancelHoldFn</b> (<code>ADMIN_TOKEN</code>)</li></ul></div>
+    </div>
+  </section>
+
+  <div class="connector">
+    <div class="flow"><span class="lbl">plain function calls — same process</span><span class="arr">▼</span></div>
+    <div class="flow"><span class="lbl">payments ⇄ engine (fulfill / refund)</span><span class="arr">▼</span></div>
+    <div class="flow"><span class="lbl">Stripe SDK → api.stripe.com</span><span class="arr">▼</span></div>
+  </div>
+
+  <!-- ======================= LAYER 3 : DOMAIN ======================= -->
+  <section class="layer">
+    <span class="layer-tag">DOMAIN LAYER · src/lib · THE BUSINESS RULES</span>
+    <h2>The engine — one module owns every inventory decision</h2>
+    <p class="how">All correctness lives in <code>inventory.ts</code>. Pages, RPCs, the webhook, and the cron
+      all call these same functions — there is exactly <b>one</b> code path that can hand out a seat, so
+      there is exactly one place the no-oversell rule must hold (and it's covered by automated tests).</p>
+    <div class="cols c3">
+      <div class="cell accent"><span class="k">inventory.ts · 321 LINES</span><h3>Inventory engine</h3>
+        <ul>
+          <li><span class="n">3</span><b>reserveSeat</b> — atomically claims 1 physical seat row (<code>FOR UPDATE SKIP LOCKED</code>), creates the pending order</li>
+          <li><b>markOrderPaid</b> — idempotent <code>pending→paid</code>; honors hold, else re-claims, else refunds</li>
+          <li><b>createEvent / updateEvent</b> — mints exactly <code>ticket_limit</code> seat rows; resize can only add/remove <b>free</b> rows</li>
+          <li><b>refundOrder / cancelHold</b> — release seat back to <code>free</code></li>
+          <li><b>verifyTicket / getEventStatus</b> — read-only lookups; counts are <i>derived from rows</i></li>
+        </ul></div>
+      <div class="cell"><span class="k">payments.ts</span><h3>Stripe adapter</h3>
+        <ul>
+          <li><span class="n">4</span><b>createCheckoutSession</b> — hosted checkout, <code>client_reference_id = orderId</code></li>
+          <li><b>confirmCheckoutSession</b> — retrieve session server-side, require <code>payment_status='paid'</code>, then <code>markOrderPaid</code></li>
+          <li><b>handleWebhookEvent</b> — signature-verified backstop → same <code>markOrderPaid</code></li>
+          <li>No-capacity edge → <b>automatic refund</b></li>
+        </ul></div>
+      <div class="cell"><span class="k">codes.ts · db/index.ts</span><h3>Support</h3>
+        <ul>
+          <li><b>generateTicketCode</b> — 128-bit random, URL-safe → the QR is unguessable</li>
+          <li><b>db client</b> — Drizzle ORM over postgres.js, pooled, <code>prepare:false</code> (safe behind PlanetScale's transaction pooler)</li>
+          <li>Modes: <code>PAYMENTS_MODE=stripe|free</code></li>
+        </ul></div>
+    </div>
+  </section>
+
+  <div class="connector">
+    <div class="flow single" style="grid-column:1/-1"><span class="lbl">SQL over TLS · every claim inside a single ACID transaction</span><span class="arr">▼</span></div>
+  </div>
+
+  <!-- ======================= LAYER 4 : DATA ======================= -->
+  <section class="layer">
+    <span class="layer-tag">DATA LAYER · PLANETSCALE POSTGRES · SINGLE SOURCE OF TRUTH</span>
+    <h2>Four tables — and the inventory is physical rows, not a number</h2>
+    <p class="how">The key design choice: an event's capacity is represented by <b>actual ticket rows</b>
+      pre-created when the drop is made. Selling means flipping a row's status — never inserting one.
+      Availability shown to buyers is a derived <code>count(*)</code>; it can render stale for a moment,
+      but it can never <i>sell</i> wrong, because reads don't allocate — only the guarded claim does.</p>
+    <div class="cols c4">
+      <div class="cell"><span class="k">TABLE</span><h3>users</h3>
+        <table><tr><td>email</td><td>unique, lower-cased</td></tr><tr><td>name</td><td>shown to staff at verify</td></tr></table></div>
+      <div class="cell"><span class="k">TABLE</span><h3>events <i style="color:var(--muted2)">(drops)</i></h3>
+        <table><tr><td>ticket_limit</td><td>how many seat rows exist</td></tr>
+        <tr><td>price, sale window</td><td>per-drop config</td></tr>
+        <tr><td>hold_minutes, max_per_user</td><td>anti-abuse knobs</td></tr></table></div>
+      <div class="cell"><span class="k">TABLE</span><h3>orders</h3>
+        <table><tr><td>status</td><td>pending · paid · expired · cancelled · refunded</td></tr>
+        <tr><td>expires_at</td><td>hold deadline</td></tr>
+        <tr><td>payment_intent_id</td><td>links to Stripe for refunds</td></tr></table></div>
+      <div class="cell accent"><span class="k">TABLE · THE INVENTORY</span><h3>tickets ★</h3>
+        <table><tr><td>status</td><td>seat lifecycle (below)</td></tr>
+        <tr><td>held_until</td><td>lazy hold expiry</td></tr>
+        <tr><td>ticket_code</td><td>128-bit QR credential, unique</td></tr>
+        <tr><td colspan="2">index <code>(event_id, status)</code> — the claim query is O(1)-ish</td></tr></table>
+        <div class="pillrow"><span class="pill p-free">FREE</span><span class="pill p-held">HELD</span><span class="pill p-sold">SOLD</span><span class="pill p-x">CANCELLED/REFUNDED</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= FOOTER ======================= -->
+  <div class="footer">
+    <div class="foot-card inv"><span class="t">THE INVARIANT</span>
+      <b>sold + held ≤ ticket_limit — always, physically.</b> A 21st sale on a 20-seat drop would require a
+      21st ticket row, and one never exists. No counter to race, no counter to drift.
+      <span class="n" style="margin-left:6px">8</span> Buyer sees the QR pass; staff verify it read-only.</div>
+    <div class="foot-card test"><span class="t">PROVEN BY AUTOMATED TESTS · tests/</span>
+      <b>concurrency.test.ts</b> — 65 simultaneous buyers vs 20 seats → <b>exactly 20</b> succeed, 45 get SOLD_OUT ·
+      <b>holds.test.ts</b> — expired holds free capacity with no cron ·
+      <b>payment-backstop.test.ts</b> — a late payment after sellout is auto-refunded, never oversold.</div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Soupleaf Hotpot Pass — Why Overselling Is Impossible</title>
+<style>
+  :root{
+    --ink:#16240f; --ink2:#1c2a1a; --green:#3e9b3f; --green-d:#2f7d2a;
+    --muted:#566a52; --muted2:#7c8a78; --line:#dfe8d8; --bg:#eef3ec; --card:#fff;
+    --amber:#a9772a; --amber-bg:#f7efdd; --red:#b3402f; --red-bg:#f9e7e2;
+    --mono:'Space Mono','SFMono-Regular',Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink2);
+    font-family:'Figtree',system-ui,-apple-system,'Segoe UI',sans-serif;
+    -webkit-font-smoothing:antialiased;padding:36px 20px 64px}
+  .page{max-width:1060px;margin:0 auto}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;color:#7e9277}
+  h1{font-size:34px;letter-spacing:-.02em;color:var(--ink);margin:10px 0 6px;max-width:820px}
+  .sub{color:var(--muted);font-size:15px;max-width:780px;line-height:1.55;margin:0 0 8px}
+  .scorecard{display:flex;gap:12px;margin:20px 0 30px;flex-wrap:wrap}
+  .score{border-radius:13px;padding:13px 18px;font-size:13px;line-height:1.5}
+  .score b{display:block;font-size:20px;letter-spacing:-.01em}
+  .score.bad{background:var(--red-bg);color:#7c2f22}.score.bad b{color:var(--red)}
+  .score.good{background:var(--ink);color:#cfe0c8}.score.good b{color:#8fe08f}
+
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:20px 22px 22px;box-shadow:0 3px 14px rgba(28,42,26,.05);margin-bottom:14px}
+  .step{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10px;
+    letter-spacing:.18em;color:#fff;background:var(--green-d);border-radius:6px;padding:4px 10px}
+  .step.red{background:var(--red)}
+  section h2{font-size:19px;margin:10px 0 4px;color:var(--ink)}
+  section .how{font-size:13.5px;color:var(--muted);line-height:1.6;margin:2px 0 16px;max-width:900px}
+  code,.sql{font-family:var(--mono)}
+  .inlinecode{font-size:11.5px;background:#eef3ec;border-radius:4px;padding:1px 5px}
+
+  /* ---------- Panel 1 : the race others lose ---------- */
+  .race{display:grid;grid-template-columns:1fr 34px 1fr;gap:0 14px;max-width:720px}
+  .race .lanehead{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;color:var(--muted2);padding-bottom:6px}
+  .race .ev{border:1px solid var(--line);border-radius:9px;background:#fbfdf9;padding:8px 11px;
+    font-size:12.5px;margin-bottom:8px;color:var(--ink2)}
+  .race .ev.bad{background:var(--red-bg);border-color:#eac3ba;color:#7c2f22;font-weight:600}
+  .race .t{grid-column:2;display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:10px;color:var(--muted2)}
+  .boom{margin-top:10px;background:var(--red-bg);border:1px dashed #e0a99e;border-radius:11px;
+    padding:11px 14px;font-size:13px;color:#7c2f22;max-width:720px}
+
+  /* ---------- Panel 2 : physical rows ---------- */
+  .seatgrid{display:grid;grid-template-columns:repeat(10,44px);gap:7px;margin:4px 0 12px}
+  .seat{height:44px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:10px;border:1px solid transparent}
+  .s-free{background:#e7f1e3;color:var(--green-d);border-color:#cfe0c8}
+  .s-held{background:var(--amber-bg);color:var(--amber);border-color:#e8d9b8}
+  .s-sold{background:var(--ink);color:#9fe09f}
+  .ghost{height:44px;border-radius:9px;border:1.5px dashed #d4baB4;display:flex;align-items:center;
+    justify-content:center;color:#c08a7d;font-size:16px;background:transparent}
+  .legend{display:flex;gap:16px;font-size:11.5px;color:var(--muted);margin-top:2px;flex-wrap:wrap}
+  .lg{display:inline-flex;gap:6px;align-items:center}.sw{width:12px;height:12px;border-radius:3px}
+
+  /* ---------- Panel 3 : claim flow ---------- */
+  .flowcol{display:flex;flex-direction:column;align-items:stretch;max-width:640px}
+  .fbox{border:1px solid var(--line);border-radius:11px;background:#fbfdf9;padding:11px 14px;font-size:13px}
+  .fbox b{color:var(--ink)}
+  .fbox .note{font-size:11.5px;color:var(--muted2);margin-top:2px}
+  .fbox.core{background:var(--ink);color:#dfe8d8;border-color:var(--ink)}
+  .fbox.core b{color:#fff}
+  .down{align-self:center;color:var(--green);padding:4px 0;font-size:14px;line-height:1}
+  .down .lbl{font-family:var(--mono);font-size:10px;color:var(--muted2);margin-right:6px;letter-spacing:.06em}
+  .sqlbox{font-family:var(--mono);font-size:11.5px;line-height:1.7;background:#0f1d09;color:#cfe0c8;
+    border-radius:11px;padding:14px 16px;overflow-x:auto;margin:8px 0 0}
+  .sqlbox .hl{color:#8fe08f;font-weight:700}
+  .sqlbox .cm{color:#7e9277}
+  .branch{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px;max-width:640px}
+  .branch .fbox.yes{background:#f2f8ef;border-color:#cfe0c8}
+  .branch .fbox.no{background:var(--red-bg);border-color:#eac3ba}
+  .branch .bh{font-family:var(--mono);font-size:10px;letter-spacing:.14em;margin-bottom:4px;display:block}
+  .branch .yes .bh{color:var(--green-d)}.branch .no .bh{color:var(--red)}
+
+  /* ---------- Panel 4 : stampede ---------- */
+  .stampede{display:grid;grid-template-columns:150px 60px 1fr;gap:16px;align-items:center;max-width:860px}
+  .crowd{display:flex;flex-direction:column;gap:6px}
+  .crowd .band{border-radius:9px;padding:9px 12px;font-size:12.5px;font-weight:600}
+  .band.b20{background:#f2f8ef;border:1px solid #cfe0c8;color:var(--green-d)}
+  .band.b45{background:#f1f0ee;border:1px solid #e2e1de;color:#8a8f86}
+  .arrows{font-size:20px;color:var(--green);text-align:center;line-height:1.2}
+  .outcomes{display:flex;flex-direction:column;gap:8px}
+  .out{border-radius:11px;padding:11px 14px;font-size:12.5px;line-height:1.55}
+  .out.won{background:#f2f8ef;border:1px solid #cfe0c8;color:var(--ink2)}
+  .out.lost{background:#fbfaf8;border:1px solid #e2e1de;color:var(--muted)}
+  .out b{color:var(--ink)}
+
+  /* ---------- Panel 5 : lifecycle timeline ---------- */
+  .cycle{display:grid;grid-template-columns:repeat(4,1fr);gap:0;max-width:900px;align-items:stretch}
+  .cyc{position:relative;padding:0 22px 0 0}
+  .cyc .box{border:1px solid var(--line);border-radius:11px;background:#fbfdf9;padding:11px 13px;height:100%;font-size:12.5px;line-height:1.55}
+  .cyc .box b{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;margin-bottom:4px}
+  .cyc:not(:last-child)::after{content:"▶";position:absolute;right:4px;top:50%;transform:translateY(-50%);
+    color:var(--green);font-size:12px}
+  .cyc .b-free b{color:var(--green-d)}.cyc .b-held{background:var(--amber-bg);border-color:#e8d9b8}
+  .cyc .b-held b{color:var(--amber)}.cyc .b-sold{background:var(--ink);color:#dfe8d8;border-color:var(--ink)}
+  .cyc .b-sold b{color:#9fe09f}
+  .loopnote{margin-top:10px;font-size:12.5px;color:var(--muted);background:#f6f9f3;border:1px dashed #cfe0c8;
+    border-radius:10px;padding:10px 14px;max-width:900px}
+
+  /* ---------- Panel 6 : payment boundary ---------- */
+  .pay{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:920px;margin-top:4px}
+  .pcase{border-radius:12px;padding:13px 15px;font-size:12.5px;line-height:1.6;border:1px solid var(--line)}
+  .pcase .ph{font-family:var(--mono);font-size:10px;letter-spacing:.14em;display:block;margin-bottom:6px}
+  .pcase.a{background:#f2f8ef;border-color:#cfe0c8}.pcase.a .ph{color:var(--green-d)}
+  .pcase.b{background:var(--amber-bg);border-color:#e8d9b8}.pcase.b .ph{color:var(--amber)}
+  .pcase.c{background:var(--red-bg);border-color:#eac3ba}.pcase.c .ph{color:var(--red)}
+  .gatehead{max-width:920px;border-radius:11px;background:#fbfdf9;border:1px solid var(--line);
+    padding:11px 14px;font-size:13px;margin-bottom:2px}
+
+  .proof{background:var(--ink);border-radius:16px;color:#cfe0c8;padding:20px 22px;font-size:13px;line-height:1.65}
+  .proof h2{color:#fff;margin:6px 0 8px;font-size:19px}
+  .proof .step{background:#2f4a26}
+  .proof b{color:#9fe09f}
+  .proof .mono{font-family:var(--mono);font-size:11.5px}
+
+  @media (max-width:860px){
+    .seatgrid{grid-template-columns:repeat(5,44px)}
+    .race{grid-template-columns:1fr}.race .t{display:none}
+    .stampede{grid-template-columns:1fr}.arrows{transform:rotate(90deg)}
+    .cycle{grid-template-columns:1fr}.cyc{padding:0 0 18px}.cyc:not(:last-child)::after{content:"▼";right:auto;left:50%;top:auto;bottom:0;transform:translateX(-50%)}
+    .pay,.branch{grid-template-columns:1fr}
+  }
+  @media print{body{background:#fff;padding:0}section{box-shadow:none;break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="eyebrow">SOUPLEAF · HOTPOT PASS · THE ANTI-OVERSELL MECHANISM</div>
+  <h1>Why this system physically cannot sell ticket #21</h1>
+  <p class="sub">
+    Most ticketing tools oversell because they <i>check a number, then write a row</i> — and under load,
+    hundreds of buyers pass the check in the same instant. We removed the number entirely.
+    Here is the exact mechanism, straight from the shipped code.
+  </p>
+  <div class="scorecard">
+    <div class="score bad"><b>20 → 65</b>what a popular tool sold on our last drop<br/>(allocated 20, charged 65 people)</div>
+    <div class="score good"><b>65 → 20</b>this system, under the same stampede, in automated tests<br/>(65 simultaneous buyers, exactly 20 passes, 45 polite "sold out"s)</div>
+  </div>
+
+  <!-- ============ 1. THE FAILURE MODE ============ -->
+  <section>
+    <span class="step red">STEP 0 · THE BUG WE DESIGNED OUT</span>
+    <h2>How normal systems oversell: the check-then-write race</h2>
+    <p class="how">A counter-based system asks <span class="inlinecode">is sold &lt; 20?</span> and then inserts a ticket.
+      Between the <b>check</b> and the <b>write</b> there's a gap of a few milliseconds — and during a hyped drop,
+      dozens of requests sit inside that gap at once. Every one of them saw "19 &lt; 20". Every one of them inserts.</p>
+    <div class="race">
+      <div class="lanehead">BUYER A'S REQUEST</div><div></div><div class="lanehead">BUYER B'S REQUEST (same instant)</div>
+      <div class="ev">reads counter → <b>19 sold</b> ✓ room!</div><div class="t">t₁</div><div class="ev">reads counter → <b>19 sold</b> ✓ room!</div>
+      <div class="ev">inserts ticket → now 20</div><div class="t">t₂</div><div class="ev bad">inserts ticket → now 21 ✗ OVERSOLD</div>
+    </div>
+    <div class="boom">⚠ Scale that gap to a drop where hundreds click at once and you get 65 tickets sold against 20 —
+      the app-level <span class="inlinecode">if</span> statement can't stop it, because every request's check was <i>true when it ran</i>.</div>
+  </section>
+
+  <!-- ============ 2. THE FOUNDATION ============ -->
+  <section>
+    <span class="step">LAYER 1 · THE FOUNDATION</span>
+    <h2>Capacity is physical rows — there is no counter to race</h2>
+    <p class="how">When a drop is created, the system mints <b>exactly</b> <span class="inlinecode">ticket_limit</span> seat rows
+      in the database (<span class="inlinecode">INSERT … FROM generate_series(1, 20)</span>). Selling never inserts a ticket —
+      it only <b>flips an existing row</b> from <span class="inlinecode">free</span> to <span class="inlinecode">held</span> to
+      <span class="inlinecode">sold</span>. A 21st sale would need a 21st row, and no code path in the entire system creates one
+      after the drop is minted. Even the admin "resize" tool can only add rows or delete <i>free</i> ones — never below what's claimed.</p>
+    <div class="seatgrid">
+      <div class="seat s-sold">S1</div><div class="seat s-sold">S2</div><div class="seat s-sold">S3</div>
+      <div class="seat s-sold">S4</div><div class="seat s-sold">S5</div><div class="seat s-sold">S6</div>
+      <div class="seat s-sold">S7</div><div class="seat s-sold">S8</div><div class="seat s-held">S9</div>
+      <div class="seat s-held">S10</div><div class="seat s-held">S11</div><div class="seat s-free">S12</div>
+      <div class="seat s-free">S13</div><div class="seat s-free">S14</div><div class="seat s-free">S15</div>
+      <div class="seat s-free">S16</div><div class="seat s-free">S17</div><div class="seat s-free">S18</div>
+      <div class="seat s-free">S19</div><div class="seat s-free">S20</div>
+    </div>
+    <div class="legend">
+      <span class="lg"><span class="sw" style="background:#e7f1e3"></span> FREE — claimable</span>
+      <span class="lg"><span class="sw" style="background:var(--amber-bg)"></span> HELD — buyer in checkout (10–15 min)</span>
+      <span class="lg"><span class="sw" style="background:var(--ink)"></span> SOLD — paid, QR issued</span>
+      <span class="lg" style="color:#c08a7d"><span class="ghost" style="width:12px;height:12px;border-radius:3px"></span>&nbsp;seat #21 — <b>does not exist</b></span>
+    </div>
+  </section>
+
+  <!-- ============ 3. THE CLAIM ============ -->
+  <section>
+    <span class="step">LAYER 2 · THE CLAIM · reserveSeat()</span>
+    <h2>Check and take are one indivisible database operation</h2>
+    <p class="how">When a buyer clicks <b>Buy</b>, everything below runs inside a single ACID transaction.
+      The heart of it is one SQL statement in which finding a free seat and taking it are the <i>same action</i> —
+      there is no gap for another buyer to slip into.</p>
+    <div class="flowcol">
+      <div class="fbox"><b>BEGIN transaction</b><div class="note">sale window open? · per-person limit not exceeded? · buyer upserted by email</div></div>
+      <div class="down"><span class="lbl">then</span>▼</div>
+      <div class="fbox"><b>Create the order</b> — status <code class="inlinecode">pending</code>, expires in <code class="inlinecode">hold_minutes</code><div class="note">if the claim below fails, this rolls back automatically — no orphan orders</div></div>
+      <div class="down"><span class="lbl">then</span>▼</div>
+      <div class="fbox core"><b>THE CLAIM — one atomic statement</b>
+        <div class="sqlbox">UPDATE tickets SET status=<span class="hl">'held'</span>, order_id=…, held_until=now()+hold<br/>WHERE id = ( SELECT id FROM tickets<br/>&nbsp;&nbsp;&nbsp;WHERE event_id = $drop<br/>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;AND (status=<span class="hl">'free'</span> OR (status=<span class="hl">'held'</span> AND held_until &lt; now()))<br/>&nbsp;&nbsp;&nbsp;ORDER BY id <span class="hl">FOR UPDATE SKIP LOCKED</span> LIMIT 1 )<br/>RETURNING id;&nbsp;&nbsp;<span class="cm">-- a row back = yours · no row = sold out</span></div>
+      </div>
+      <div class="down">▼</div>
+    </div>
+    <div class="branch">
+      <div class="fbox yes"><span class="bh">✓ A ROW CAME BACK</span><b>Seat is held for this buyer.</b> COMMIT, then send them to Stripe Checkout. The seat is theirs for the hold window — nobody else can touch it.</div>
+      <div class="fbox no"><span class="bh">✗ NO ROW CAME BACK</span><b>Genuinely sold out.</b> ROLLBACK — the pending order evaporates, no Stripe session is created, <b>nobody is charged</b>. Buyer sees a clean "Sold out".</div>
+    </div>
+  </section>
+
+  <!-- ============ 4. THE STAMPEDE ============ -->
+  <section>
+    <span class="step">LAYER 2, UNDER FIRE · FOR UPDATE SKIP LOCKED</span>
+    <h2>65 buyers hit "Buy" in the same second — what the database does</h2>
+    <p class="how"><span class="inlinecode">FOR UPDATE</span> means a claimed row is locked until its transaction commits.
+      <span class="inlinecode">SKIP LOCKED</span> means each buyer's query <b>skips rows other buyers are mid-claiming</b> and grabs
+      the next untouched one. So concurrent buyers don't queue up behind one row and don't collide — they spread across
+      different seats. The moment all 20 rows are taken, the subquery finds nothing, and that <i>is</i> the sold-out signal.</p>
+    <div class="stampede">
+      <div class="crowd">
+        <div class="band b20">buyers 1–20<br/><span style="font-weight:400;font-size:11.5px">each locks a different free row</span></div>
+        <div class="band b45">buyers 21–65<br/><span style="font-weight:400;font-size:11.5px">subquery returns no row</span></div>
+      </div>
+      <div class="arrows">→→<br/>→→<br/>→→</div>
+      <div class="outcomes">
+        <div class="out won"><b>20 × seat HELD</b> — one row each, zero collisions, zero waiting in line. Proceed to payment.</div>
+        <div class="out lost"><b>45 × SOLD_OUT</b> — transaction rolled back, no order, no charge, instant honest answer. Not "payment failed", not a refund three days later — just the truth.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5. HOLDS ============ -->
+  <section>
+    <span class="step">LAYER 3 · THE HOLD LIFECYCLE</span>
+    <h2>Abandoned checkouts release themselves — no cleanup job required</h2>
+    <p class="how">Look back at the claim query's WHERE clause: it accepts <span class="inlinecode">free</span> rows <b>or</b>
+      <span class="inlinecode">held</span> rows whose <span class="inlinecode">held_until</span> has passed. That means hold expiry
+      isn't a scheduled job that could crash or lag — an expired hold is simply <i>claimable by the next buyer, by definition</i>.
+      A cron job exists only to tidy up reporting labels; correctness never depends on it.</p>
+    <div class="cycle">
+      <div class="cyc"><div class="box b-free"><b>FREE</b>Minted when the drop is created. Waiting to be claimed.</div></div>
+      <div class="cyc"><div class="box b-held"><b>HELD · 10–15 MIN</b>Buyer clicked Buy and is on Stripe's payment page. Counts against availability so the drop can't over-promise.</div></div>
+      <div class="cyc"><div class="box b-sold"><b>SOLD</b>Payment confirmed → 128-bit unguessable QR code issued. This is the Hotpot Pass.</div></div>
+      <div class="cyc"><div class="box"><b style="color:var(--muted2)">…OR HOLD EXPIRES</b>Buyer wandered off. The row's <code class="inlinecode">held_until</code> passes and the very next claim can take it. Seat lost ≠ seat leaked.</div></div>
+    </div>
+    <div class="loopnote">↩ Refunds work the same way: an admin refund flips the seat back to <b>FREE</b> (and the QR code is wiped), so the seat is immediately resellable — still never exceeding the 20 rows that exist.</div>
+  </section>
+
+  <!-- ============ 6. PAYMENT BOUNDARY ============ -->
+  <section>
+    <span class="step">LAYER 4 · THE PAYMENT BOUNDARY · markOrderPaid()</span>
+    <h2>Money can never mint a seat</h2>
+    <p class="how">Payment confirmation arrives twice by design — once from the buyer's success redirect (instant pass)
+      and once from Stripe's signed webhook (backstop for closed tabs). Both call the <b>same</b> function, which first
+      locks the order row so the two can't double-fulfill, then handles every case — including the nasty one where a
+      buyer's hold expired but their payment still landed.</p>
+    <div class="gatehead">🔒 <b>Gate:</b> lock the order row (<code class="inlinecode">FOR UPDATE</code>) → redirect and webhook are serialized; then branch:</div>
+    <div class="pay">
+      <div class="pcase a"><span class="ph">CASE A · NORMAL (99%+)</span><b>Order pending, seat still held →</b> flip seat to SOLD, issue the QR code, mark order paid. Runs once; the second confirmation sees "already paid" and does nothing (idempotent).</div>
+      <div class="pcase b"><span class="ph">CASE B · SLOW PAYER</span><b>Hold expired, seat was reclaimed by someone else →</b> try to claim a <i>different</i> free seat using the exact same guarded query. If one exists, the buyer still gets a pass.</div>
+      <div class="pcase c"><span class="ph">CASE C · SOLD OUT MEANWHILE</span><b>No seat exists anymore →</b> automatic Stripe refund, order marked <code class="inlinecode">refunded</code>, buyer told plainly. The one thing that never happens: creating seat #21.</div>
+    </div>
+  </section>
+
+  <!-- ============ PROOF ============ -->
+  <div class="proof">
+    <span class="step">THE RECEIPTS</span>
+    <h2>Not a promise — a property we test on every change</h2>
+    The exact disaster scenario is an automated test that must pass before any code ships
+    (<span class="mono">tests/concurrency.test.ts</span>): seed a 20-seat drop, fire <b>65 truly concurrent</b> buy
+    requests at it, and assert <b>exactly 20</b> succeed, <b>45</b> receive SOLD_OUT, and the database holds exactly
+    20 claimed rows. Companion tests prove expired holds free themselves (<span class="mono">holds.test.ts</span>) and
+    that a late payment after sellout is refunded rather than oversold (<span class="mono">payment-backstop.test.ts</span>).
+    <br/><br/>
+    <b>The invariant, in one sentence:</b> a pass can only ever be one of the <span class="mono">ticket_limit</span> physical rows created
+    with the drop — so sold + held ≤ limit isn't a rule the code enforces, it's a fact of how the data is shaped.
+  </div>
+</div>
+</body>
+</html>
