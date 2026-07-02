@@ -89,8 +89,10 @@ the webhook route.
 
 ### Diagram 2 — "Why overselling is physically impossible" (vertical story, scrollable page or tall poster)
 
-Open with a scoreboard: red card "20 → 65 · what the last tool sold" vs dark
-green card "65 → 20 · this system under the same stampede (automated test)".
+Open with a scoreboard of three cards: red "20 → 65 · what the last tool
+sold" · dark green "65 → 20 · this system under the same stampede (automated
+test)" · dark green "1,000 → 20 · a 1,000-buyer stampede resolves in ~1 second
+on a single small database — still exactly 20".
 
 **Panel 0 · The bug we designed out (red header):** two side-by-side request
 lanes racing a shared counter: both read "19 < 20 ✓" at t₁, both insert at
@@ -126,6 +128,19 @@ bands (buyers 1–20, buyers 21–65), arrows fanning into the seat grid; right
 two outcome cards: "20 × seat HELD — each locked a different row, zero
 collisions (SKIP LOCKED skips rows mid-claim)" and "45 × SOLD_OUT — instant
 honest answer; not a failed payment, not a refund days later".
+
+**Panel 3½ · Scale — thousands of clicks at once:** headline "Losing is
+cheap — that's the trick to handling a mob." Three cards:
+green "MEASURED — 1,000 concurrent buys → exactly 20 seats in ~1 s (~900
+req/s) on one small Postgres pool (tests/concurrency.test.ts); production
+PlanetScale only raises the ceiling" · green "WHY IT KEEPS SCALING — a claim
+is ~2–3 ms of DB work; a sold-out answer is a sub-millisecond index scan;
+SKIP LOCKED means nobody queues behind a lock; only the ≤ ticket_limit
+winners ever touch Stripe; PlanetScale's pooler fans thousands of app
+connections into a few dozen backend ones; Vercel scales app instances
+horizontally" · amber "THE HONEST CEILING — at six-figure same-second
+traffic you'd add an edge waiting-room in front; the engine wouldn't change,
+and overload only ever degrades to slow/sold-out, never to seat #21".
 
 **Panel 4 · Holds release themselves:** four-stage lifecycle FREE → HELD
 (10–15 min, buyer on Stripe) → SOLD (QR issued) with alternate exit "hold

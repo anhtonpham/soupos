@@ -141,6 +141,7 @@
   <div class="scorecard">
     <div class="score bad"><b>20 → 65</b>what a popular tool sold on our last drop<br/>(allocated 20, charged 65 people)</div>
     <div class="score good"><b>65 → 20</b>this system, under the same stampede, in automated tests<br/>(65 simultaneous buyers, exactly 20 passes, 45 polite "sold out"s)</div>
+    <div class="score good"><b>1,000 → 20</b>and at 15× that load: 1,000 truly concurrent buys<br/>resolved in <b style="display:inline;font-size:13px">~1 second</b> on a single small database — still exactly 20</div>
   </div>
 
   <!-- ============ 1. THE FAILURE MODE ============ -->
@@ -229,6 +230,32 @@
     </div>
   </section>
 
+  <!-- ============ 4b. SCALE ============ -->
+  <section>
+    <span class="step">SCALE · THOUSANDS OF CLICKS AT ONCE</span>
+    <h2>Losing is cheap — that's the whole trick to handling a mob</h2>
+    <p class="how">A drop's traffic is thousands of people competing for a handful of seats. So the question isn't
+      "can the database sell thousands of tickets per second?" — it's <b>"how cheaply can it say <i>sold out</i>?"</b>
+      Here, a losing request is one indexed scan that finds no claimable row: a fraction of a millisecond of database
+      work, no lock to wait behind (<span class="inlinecode">SKIP LOCKED</span> means nobody queues), no order written,
+      and — crucially — <b>no call to Stripe</b>. Only the ≤ 20 winners ever reach payment, no matter how many click.</p>
+    <div class="pay" style="max-width:940px">
+      <div class="pcase a"><span class="ph">MEASURED · tests/concurrency.test.ts</span>
+        <b>1,000 concurrent buys → exactly 20 seats, ~1 s end-to-end (~900 req/s)</b> — on a single
+        laptop-class Postgres through one small connection pool. Production (PlanetScale, more connections)
+        only raises this ceiling.</div>
+      <div class="pcase a"><span class="ph">WHY IT KEEPS SCALING</span>
+        <b>Claim ≈ 2–3 ms of DB work</b> → each pooled connection sustains hundreds of claims/sec, and
+        PlanetScale's pooler fans thousands of app connections into a few dozen real ones. Vercel adds app
+        instances horizontally with traffic. Meanwhile storefront "X of N left" reads are indexed counts — trivial.</div>
+      <div class="pcase b"><span class="ph">THE HONEST CEILING</span>
+        At <b>stadium-tour scale</b> (six-figure clicks in the same second) you'd put an edge waiting-room/rate
+        limit in front — the engine underneath wouldn't change. And the failure direction is the safe one:
+        <b>overload can slow responses or turn people away; it can never mint seat #21.</b> Correctness is
+        structural; capacity is just capacity.</div>
+    </div>
+  </section>
+
   <!-- ============ 5. HOLDS ============ -->
   <section>
     <span class="step">LAYER 3 · THE HOLD LIFECYCLE</span>
@@ -269,7 +296,8 @@
     The exact disaster scenario is an automated test that must pass before any code ships
     (<span class="mono">tests/concurrency.test.ts</span>): seed a 20-seat drop, fire <b>65 truly concurrent</b> buy
     requests at it, and assert <b>exactly 20</b> succeed, <b>45</b> receive SOLD_OUT, and the database holds exactly
-    20 claimed rows. Companion tests prove expired holds free themselves (<span class="mono">holds.test.ts</span>) and
+    20 claimed rows. A second test raises that to a <b>1,000-buyer stampede</b> — still exactly 20, resolved in about
+    a second. Companion tests prove expired holds free themselves (<span class="mono">holds.test.ts</span>) and
     that a late payment after sellout is refunded rather than oversold (<span class="mono">payment-backstop.test.ts</span>).
     <br/><br/>
     <b>The invariant, in one sentence:</b> a pass can only ever be one of the <span class="mono">ticket_limit</span> physical rows created

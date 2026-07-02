@@ -44,6 +44,45 @@ test('never oversells: 65 concurrent buyers vs 20 seats → exactly 20', async (
   assert.equal(counts.free ?? 0, 0);
 });
 
+test('stampede: 1,000 concurrent buyers vs 20 seats → exactly 20, quickly', async () => {
+  await resetDb();
+  await createEvent({
+    slug: 'stampede',
+    name: 'Stampede Test',
+    saleStartsAt: new Date(Date.now() - 60_000),
+    ticketLimit: 20,
+    holdMinutes: 30,
+    maxPerUser: 1,
+    priceCents: 2500,
+  });
+
+  const N = 1000;
+  const t0 = performance.now();
+  const results = await Promise.all(
+    Array.from({ length: N }, (_, i) =>
+      reserveSeat({ eventSlug: 'stampede', email: `stampede${i}@example.com` }),
+    ),
+  );
+  const elapsedMs = performance.now() - t0;
+
+  const succeeded = results.filter((r) => r.ok).length;
+  const soldOut = results.filter((r) => !r.ok && r.reason === 'SOLD_OUT').length;
+
+  assert.equal(succeeded, 20, `expected exactly 20 reservations, got ${succeeded}`);
+  assert.equal(soldOut, 980, `expected 980 sold-out, got ${soldOut}`);
+
+  const status = await getEventStatus('stampede');
+  assert.equal(status!.held, 20);
+  assert.equal(status!.available, 0);
+
+  // Not a formal benchmark — just proof the sold-out path is cheap. All 1,000
+  // claims should resolve in seconds, not minutes, on a single small database.
+  console.log(
+    `# stampede: ${N} concurrent buys resolved in ${(elapsedMs / 1000).toFixed(2)}s ` +
+      `(~${Math.round(N / (elapsedMs / 1000))} req/s through one pooled connection set)`,
+  );
+});
+
 test('per-user limit: a second active reservation by the same email is rejected', async () => {
   await resetDb();
   await createEvent({

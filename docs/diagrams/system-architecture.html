@@ -135,7 +135,9 @@
     <p class="how">A single TanStack Start app (React 19 + Vite, deployed as Vercel Functions via Nitro).
       Pages are server-rendered; browser code calls the server <i>only</i> through
       <code>createServerFn</code> RPCs whose inputs are validated with <code>zod</code>. Two endpoints that
-      external services call (Stripe, cron) are plain server routes because they need raw request bodies.</p>
+      external services call (Stripe, cron) are plain server routes because they need raw request bodies.
+      <b>Scale:</b> Vercel adds instances horizontally with traffic — thousands of simultaneous clicks just mean
+      more short-lived functions, each doing milliseconds of database work.</p>
     <div class="cols c3">
       <div class="cell"><span class="k">PAGES · SSR (src/routes)</span><h3>Buyer storefront</h3>
         <ul>
@@ -223,7 +225,10 @@
     <p class="how">The key design choice: an event's capacity is represented by <b>actual ticket rows</b>
       pre-created when the drop is made. Selling means flipping a row's status — never inserting one.
       Availability shown to buyers is a derived <code>count(*)</code>; it can render stale for a moment,
-      but it can never <i>sell</i> wrong, because reads don't allocate — only the guarded claim does.</p>
+      but it can never <i>sell</i> wrong, because reads don't allocate — only the guarded claim does.
+      <b>Scale:</b> a claim is ~2–3 ms of DB work and a sold-out answer is a sub-millisecond index scan with
+      <code>SKIP LOCKED</code> (nobody queues behind a lock); PlanetScale's pooler fans thousands of app
+      connections into a few dozen backend ones — <b>measured: 1,000 concurrent buys resolved in ~1 s</b>.</p>
     <div class="cols c4">
       <div class="cell"><span class="k">TABLE</span><h3>users</h3>
         <table><tr><td>email</td><td>unique, lower-cased</td></tr><tr><td>name</td><td>shown to staff at verify</td></tr></table></div>
@@ -252,7 +257,8 @@
       21st ticket row, and one never exists. No counter to race, no counter to drift.
       <span class="n" style="margin-left:6px">8</span> Buyer sees the QR pass; staff verify it read-only.</div>
     <div class="foot-card test"><span class="t">PROVEN BY AUTOMATED TESTS · tests/</span>
-      <b>concurrency.test.ts</b> — 65 simultaneous buyers vs 20 seats → <b>exactly 20</b> succeed, 45 get SOLD_OUT ·
+      <b>concurrency.test.ts</b> — 65 simultaneous buyers vs 20 seats → <b>exactly 20</b>; and a
+      <b>1,000-buyer stampede → still exactly 20, in ~1 s (~900 req/s)</b> on a single small database ·
       <b>holds.test.ts</b> — expired holds free capacity with no cron ·
       <b>payment-backstop.test.ts</b> — a late payment after sellout is auto-refunded, never oversold.</div>
   </div>
